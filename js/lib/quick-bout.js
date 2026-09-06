@@ -12,7 +12,7 @@
 // question of which skills survive pressure.
 
 import { el, todayISO, toast } from './util.js';
-import { supa } from './supa.js';
+import { safeWrite } from './offline.js';
 
 const INK = 'var(--ink, #1A1D24)';
 const INK_MUTE = '#6B7280';
@@ -90,22 +90,28 @@ export function quickBout({ profile, onSaved }) {
         // Only the columns the database actually requires, plus what two taps
         // can honestly fill in. scoring_actions is NOT NULL with no default in
         // some environments, so it is sent explicitly rather than assumed.
-        const { error } = await supa.from('bouts').insert({
-            profile_id: profile.id,
-            date: todayISO(),
-            my_score: mine,
-            their_score: theirs,
-            outcome: mine > theirs ? 'win' : theirs > mine ? 'loss' : 'draw',
-            opponent_name: opponent.value.trim() || null,
-            scoring_actions: []
-        });
-        if (error) {
-            toast('Could not save: ' + error.message, 'error');
+        // Through safeWrite, like every other form: on venue wifi a dropped
+        // request is queued and sent when the connection returns, instead of
+        // a "Could not save" toast and a lost score - which is what happened
+        // at Fortune. The banner at the top shows anything still waiting.
+        let res;
+        try {
+            res = await safeWrite({ table: 'bouts', op: 'insert', payload: {
+                profile_id: profile.id,
+                date: todayISO(),
+                my_score: mine,
+                their_score: theirs,
+                outcome: mine > theirs ? 'win' : theirs > mine ? 'loss' : 'draw',
+                opponent_name: opponent.value.trim() || null,
+                scoring_actions: []
+            } });
+        } catch (e) {
+            toast('Could not save: ' + (e.message || e), 'error');
             saveBtn.disabled = false;
             saveBtn.textContent = 'Save bout';
             return;
         }
-        toast('Bout logged');
+        toast(res?.offline ? 'Bout saved on this phone \u2014 it will send when the wifi is back' : 'Bout logged');
         mine = 0; theirs = 0; opponent.value = '';
         paint();
         saveBtn.disabled = false;
@@ -128,6 +134,18 @@ export function quickBout({ profile, onSaved }) {
             counter('THEM', 'theirs', themNum, 'tap-counter-them')
         ]),
         verdict,
+        el('button', {
+            type: 'button',
+            style: {
+                background: 'transparent', border: 'none', padding: '6px 0', cursor: 'pointer',
+                fontFamily: 'var(--eg-mono, monospace)', fontSize: '11px', fontWeight: '700',
+                letterSpacing: '0.12em', textTransform: 'uppercase', color: '#6B7280',
+                width: '100%', textAlign: 'center'
+            },
+            // The two counters sit side by side and get tapped the wrong way
+            // round. One tap fixes it instead of delete-and-redo.
+            onclick: () => { const t = mine; mine = theirs; theirs = t; paint(); }
+        }, ['Swap sides']),
         opponent,
         saveBtn,
         el('div', { style: { textAlign: 'center', marginTop: '8px' } }, [

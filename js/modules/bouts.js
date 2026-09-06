@@ -600,6 +600,26 @@ export async function mountBoutDetail(root, params) {
         el('a', { href: `#bouts/edit?id=${b.id}`, class: 'btn btn-ghost btn-mono-label', style: { flex: '1', textDecoration: 'none' } }, ['Edit']),
         b.opponent_id ? el('a', { href: `#opponents/show?id=${b.opponent_id}`, class: 'btn btn-ghost btn-mono-label', style: { flex: '1', textDecoration: 'none' } }, ['Scout card']) : null,
         el('button', {
+                type: 'button', class: 'btn btn-ghost btn-sm',
+                // A reversed score is the common quick-log mistake. Swapping is a
+                // one-tap fix that keeps the bout instead of delete-and-redo.
+                onclick: async (e) => {
+                    const sb = e.currentTarget; sb.disabled = true;
+                    try {
+                        const my = b.their_score ?? 0, their = b.my_score ?? 0;
+                        await safeWrite({ table: 'bouts', op: 'update', match: { id: b.id }, payload: {
+                            my_score: my, their_score: their,
+                            outcome: my > their ? 'win' : their > my ? 'loss' : 'draw'
+                        } });
+                        toast(`Scores swapped: now ${my}\u2013${their}`);
+                        location.reload();
+                    } catch (err) {
+                        sb.disabled = false;
+                        toast('Could not swap: ' + (err.message || err), 'error');
+                    }
+                }
+            }, ['Swap the scores']),
+            el('button', {
             class: 'btn btn-ghost btn-mono-label',
             style: { color: 'var(--loss)', borderColor: 'rgba(192,138,126,0.3)' },
             onclick: async (e) => {
