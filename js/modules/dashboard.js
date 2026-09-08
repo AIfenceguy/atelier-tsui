@@ -15,6 +15,7 @@ import {
 import { todayCoachCard, listCoachNotes } from '../lib/coach.js';
 import { supa } from '../lib/supa.js';
 import { buildWeeklyCoachSummary, renderCoachCard } from '../lib/drill-coach.js';
+import { pickDailyTip, renderDailyTip } from '../lib/daily-tip.js';
 
 export async function mountDashboard(root) {
     const profile = activeProfile();
@@ -59,6 +60,11 @@ export async function mountDashboard(root) {
         ]),
         el('div', { class: 'today-sub' }, heroBitsWithStreak)
     ]));
+
+    // One thing today — the tip a parent acts on, above every number.
+    try {
+        root.appendChild(renderDailyTip(await pickDailyTip(profile)));
+    } catch (e) { console.warn('Daily tip skipped:', e); }
 
     // Status metrics (Body / Mind) — two-column metric grid
     const bodyMetric = phys
