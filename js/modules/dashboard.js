@@ -81,6 +81,13 @@ export async function mountDashboard(root) {
         metricCell('TODAY · MIND', mindMetric.val, mindMetric.foot, '#mental')
     ]));
 
+    // Season plan — the next weekend worth the money, and the way to the rest.
+    // The bottom nav is twelve tabs wide; this is the front door to that screen.
+    try {
+        const seasonCard = await buildSeasonCard(profile);
+        if (seasonCard) root.appendChild(seasonCard);
+    } catch (e) { console.warn('Season card skipped:', e); }
+
     // Level dashboard — gamified XP across both kids
     try {
         const levelSection = await buildLevelDashboard();
@@ -500,4 +507,47 @@ function coachTipCard(tip) {
     }
     if (tip.why) card.appendChild(el('div', { class: 'coach-why' }, [`Why: ${tip.why}`]));
     return card;
+}
+
+// ---------------------------------------------------------------------------
+// Season card: the best-value upcoming weekend for this fencer, from the
+// scored season_events rows, ranked the same way the Season screen ranks them.
+// ---------------------------------------------------------------------------
+async function buildSeasonCard(profile) {
+    const today = todayISO();
+    const { data } = await supa.from('season_events')
+        .select('tournament,start_date,end_date,city,travel,tier,category,est_cost_two,projections')
+        .gte('start_date', today).order('start_date').limit(200);
+    const rows = (data || []).filter((r) => r.projections && r.projections[profile.name] && r.projections[profile.name].points_exp != null);
+    if (!rows.length) return null;
+    const trips = new Map();
+    for (const r of rows) {
+        const key = r.tournament + '|' + String(r.start_date).slice(0, 7);
+        const t = trips.get(key) || { tournament: r.tournament, start: r.start_date, end: r.end_date, city: r.city, travel: r.travel, cost: r.est_cost_two || 0, pts: 0, cats: [] };
+        t.pts += r.projections[profile.name].points_exp;
+        t.start = t.start < r.start_date ? t.start : r.start_date;
+        t.end = (t.end || '') > (r.end_date || '') ? t.end : r.end_date;
+        t.cats.push(r.category.toUpperCase());
+        trips.set(key, t);
+    }
+    const ranked = [...trips.values()].filter((t) => t.pts >= 8).sort((a, b) => b.pts / Math.max(1, b.cost) - a.pts / Math.max(1, a.cost));
+    if (!ranked.length) return null;
+    const best = ranked[0];
+    const MUTE = '#6B7280';
+    const day = (iso) => new Date(String(iso).slice(0, 10) + 'T00:00:00');
+    const span = (!best.end || best.end === best.start)
+        ? day(best.start).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+        : day(best.start).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + '–' + day(best.end).toLocaleDateString(undefined, { day: 'numeric' });
+    const travel = best.travel === 'local' ? 'drive, no hotel' : best.travel === 'drive' ? 'drive' : 'fly';
+    return el('a', { href: '#season', class: 'card', style: { display: 'block', margin: '18px var(--gut) 0', textDecoration: 'none', color: 'var(--ink)' } }, [
+        el('div', { class: 'label', style: { color: MUTE } }, ['Season · best value weekend']),
+        el('div', { style: { fontFamily: 'var(--serif)', fontStyle: 'italic', fontWeight: '700', fontSize: '24px', lineHeight: '1.15', margin: '4px 0 2px', color: 'var(--ink)' } }, [best.tournament]),
+        el('div', { class: 'label', style: { color: MUTE } }, [[span, best.city, travel].filter(Boolean).join(' · ')]),
+        el('div', { style: { display: 'flex', gap: '18px', flexWrap: 'wrap', margin: '10px 0 8px' } }, [
+            el('div', {}, [el('div', { class: 'label', style: { color: MUTE } }, ['Expected points']), el('div', { class: 'num', style: { fontSize: '20px', fontWeight: '600', color: 'var(--ink)' } }, [best.pts.toFixed(0)])]),
+            el('div', {}, [el('div', { class: 'label', style: { color: MUTE } }, ['Trip for two']), el('div', { class: 'num', style: { fontSize: '20px', fontWeight: '600', color: 'var(--ink)' } }, ['$' + Math.round(best.cost).toLocaleString()])]),
+            el('div', {}, [el('div', { class: 'label', style: { color: MUTE } }, ['Events']), el('div', { class: 'num', style: { fontSize: '20px', fontWeight: '600', color: 'var(--ink)' } }, [best.cats.join(' + ')])])
+        ]),
+        el('div', { class: 'label', style: { color: 'var(--ink)', fontWeight: '700', textDecoration: 'underline', textUnderlineOffset: '3px' } }, [`See all ${ranked.length} weekends worth going →`])
+    ]);
 }

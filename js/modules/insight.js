@@ -64,7 +64,10 @@ export async function mountInsight(root) {
 
     root.appendChild(el('div', { style: { padding: '40px var(--gut) 8px' } }, [
         el('h1', { class: 'page-eyebrow' }, ['Competition Insight']),
-        el('div', { class: 'today-sub' }, [el('span', {}, [profile.name.toUpperCase()])])
+        el('div', { class: 'today-sub' }, [el('span', {}, [profile.name.toUpperCase()])]),
+        // The bottom nav is twelve tabs wide on a phone; the season plan is the
+        // screen this one leads to, so it gets a link here too.
+        el('a', { href: '#season', class: 'label', style: { display: 'inline-block', marginTop: '10px', color: INK, fontWeight: '700', textDecoration: 'underline', textUnderlineOffset: '3px' } }, ['Season plan: every weekend ranked by points per dollar →'])
     ]));
 
     const body = el('div', {});

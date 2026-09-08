@@ -97,3 +97,16 @@ section.card div[style*='display:flex'] {
        the other nav links already use. */
 body:not([data-active-role='parent']) #bottom-nav a[data-route='travel'] { display: none; }
 body[data-active-role='parent']       #bottom-nav a[data-route='style']  { display: none; }
+
+/* 11. Twelve tabs no longer fit a phone width at 1fr each: the labels clipped and
+   the newest tabs (Insight, Season, Travel) were unreadable. Give each tab a real
+   minimum width and let the row scroll sideways; wide screens are unchanged. */
+.bottom-nav {
+    grid-auto-columns: minmax(64px, 1fr);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+}
+.bottom-nav::-webkit-scrollbar { display: none; }
+.bottom-nav .tab { min-width: 64px; }
