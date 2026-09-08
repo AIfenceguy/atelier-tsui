@@ -13,6 +13,7 @@ import { supa } from '../lib/supa.js';
 import { getState } from '../lib/state.js';
 import { activeProfile } from '../lib/state.js';
 import { safeWrite } from '../lib/offline.js';
+import { homeCard } from '../lib/home-card.js';
 
 const INK = 'var(--ink, #1A1D24)';
 // Literal, not var(--ink-mute): that token composites to ~3.1:1 on white.
@@ -111,6 +112,9 @@ export async function mountTravel(root) {
         return;
     }
     const watches = data || [];
+
+    // Home first: every weekend on the Season screen is priced from this address.
+    root.appendChild(await homeCard(session));
 
     root.appendChild(el('div', { class: 'btn-row', style: { margin: '12px 0' } }, [
         el('button', { class: 'btn', onclick: () => openForm() }, ['+ Watch a flight'])

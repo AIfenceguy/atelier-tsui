@@ -21,6 +21,12 @@ import { supa } from '../lib/supa.js';
 import { activeProfile } from '../lib/state.js';
 import { safeWrite } from '../lib/offline.js';
 import { forecast, tierOf, categoryOf } from '../lib/season-model.js';
+import { estimateTrip, withLiveFare } from '../lib/trip-cost.js';
+
+// Set once per mount: the family's home and the geocoded venue cities, so a
+// trip is priced from their door rather than from the stored estimate.
+let HOME = null;
+let PLACES = new Map();
 
 const INK = 'var(--ink)';
 // Literal: var(--ink-mute) composites below AA on the cream surface.
@@ -78,16 +84,28 @@ export async function mountSeason(root) {
     body.appendChild(el('div', { class: 'empty' }, [el('p', { class: 'empty-line' }, ['Reading the fields…'])]));
 
     const today = new Date().toISOString().slice(0, 10);
-    const [tsRes, evRes, watchRes, priceRes, boutRes, refreshRes, mineRes] = await Promise.all([
+    const [tsRes, evRes, watchRes, priceRes, boutRes, refreshRes, mineRes, homeRes] = await Promise.all([
         supa.from('true_strength').select('*').eq('profile_id', profile.id),
         supa.from('season_events').select('*').gte('start_date', today).order('start_date'),
         supa.from('flight_watches').select('id,label,destination,depart_date,return_date,hotel_nightly_rate,booked_out_cash,booked_ret_cash,passengers').is('deleted_at', null),
         supa.from('flight_prices').select('watch_id,price_per_person,effective_per_person,observed_at').order('observed_at', { ascending: false }).limit(200),
         supa.from('fencer_bouts').select('*').eq('profile_id', profile.id).order('bout_date', { ascending: false }).limit(40),
         supa.from('event_refresh').select('*'),
-        supa.from('member_events').select('*').eq('profile_id', profile.id)
+        supa.from('member_events').select('*').eq('profile_id', profile.id),
+        supa.from('household').select('*').maybeSingle()
     ]);
     body.innerHTML = '';
+
+    // Price from home when a home is set; venue cities come from the geocode cache.
+    HOME = homeRes.data?.home_lat != null ? { lat: homeRes.data.home_lat, lng: homeRes.data.home_lng, city: homeRes.data.home_city, hotel_night: homeRes.data.hotel_night } : null;
+    PLACES = new Map();
+    if (HOME) {
+        const keys = [...new Set((evRes.data || []).map((e) => String(e.city || '').toLowerCase().replace(/\s+/g, ' ').trim()).filter((k) => k && k !== 'tba'))];
+        for (let i = 0; i < keys.length; i += 100) {
+            const { data } = await supa.from('places').select('key,lat,lng').in('key', keys.slice(i, i + 100));
+            for (const p of data || []) if (p.lat != null) PLACES.set(p.key, { lat: p.lat, lng: p.lng });
+        }
+    }
 
     const ts = Object.fromEntries((tsRes.data || []).map((r) => [r.days, r]));
     const myForm = formStrength(ts, profile);
@@ -395,9 +413,21 @@ function eventRow({ e, p, cost, ppd }, i, profile, refreshed) {
     return row;
 }
 
-// Cost for one adult and one fencer. A live fare (latest observed price on a
-// watch to the same city within four days of the event) overrides the estimate.
+// Cost for one adult and one fencer. Priced from the family's home when one is
+// set (drive or fly by distance, flat hotel estimate), else from the stored
+// estimate. A live fare (latest observed price on a watch to the same city
+// within four days of the event) overrides either.
 function tripCost(e, watches, latestPrice) {
+    if (HOME && e.city) {
+        const venue = PLACES.get(String(e.city).toLowerCase().replace(/\s+/g, ' ').trim());
+        const days = (e.cost_breakdown && e.cost_breakdown.days) || 1;
+        const est = venue ? estimateTrip({ home: HOME, venue, days, tier: e.tier }) : null;
+        if (est) {
+            const c = withLiveFare({ ...est, live: false }, watches, latestPrice, e.city, e.start_date);
+            e.travel = c.travel;   // so the row says drive or fly from this home, not from the stored one
+            return c;
+        }
+    }
     const cb = e.cost_breakdown || {};
     if (!e.cost_breakdown && e.est_cost_two == null) return { total: 0, flight_pp: 0, nights: 0, hotel_night: 0, entries: 0, live: false };
     let flight_pp = cb.flight_pp || 0, live = false;
