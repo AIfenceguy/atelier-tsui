@@ -187,6 +187,8 @@ function classify(e, ctx) {
     const formDown = ctx.ts90 && ctx.ts90.vs_weaker >= 6 && ctx.ts90.losses_vs_weaker / ctx.ts90.vs_weaker >= 0.3;
     const sibGoing = siblingGoing(e, ctx);
 
+    const flyIn = e.travel === 'fly';
+
     if (NATIONAL.has(e.tier)) {
         // A national event is an anchor when it can fill a slot: his own
         // category, or a cadet national result that counts for Y14.
@@ -194,21 +196,29 @@ function classify(e, ctx) {
         return sibGoing ? 'addon' : 'skip';
     }
     if (playingUp && formDown) return sibGoing && pts >= 8 ? 'addon' : 'skip';
+    // Real points: value when the trip is priced right, an add-on when the
+    // brother is going anyway, otherwise not worth the fare.
     if (pts >= 20 && (ppd == null || ppd >= 3)) return 'value';
-    if (pts >= 20) return sibGoing ? 'addon' : 'value';
-    if (e.tier === 'ryc' && p.seed_form <= 3 && p.p8 >= 0.8) return 'confidence';
+    if (pts >= 20) return sibGoing ? 'addon' : 'skip';
     if (sibGoing && pts >= 8) return 'addon';
-    if (p.field_n >= 8 && p.seed_form <= Math.max(8, Math.ceil(p.field_n / 2)) && p.p16 >= 0.2 && !playingUp) return 'challenge';
-    if (p.field_n >= 8 && p.seed_form <= Math.ceil(p.field_n / 2) && playingUp && !formDown) return 'challenge';
+    // Nobody flies for a development weekend; these are drives, or ride along.
+    if (e.tier === 'ryc' && p.seed_form <= 3 && p.p8 >= 0.8) return flyIn ? (sibGoing ? 'addon' : 'skip') : 'confidence';
+    if (flyIn && !sibGoing) return 'skip';
+    if (p.field_n >= 8 && p.seed_form > 3 && p.seed_form <= Math.max(8, Math.ceil(p.field_n / 2)) && p.p16 >= 0.2 && !playingUp) return flyIn ? 'addon' : 'challenge';
+    if (p.field_n >= 8 && p.seed_form <= Math.ceil(p.field_n / 2) && playingUp && !formDown) return flyIn ? 'addon' : 'challenge';
     return 'skip';
 }
 
-// Is the brother going to this tournament anyway? He is when he has an anchor
-// there, or an event worth real points.
+// Is the brother going to this tournament anyway? He is when he has a
+// national event there, or real points in his own age category. A
+// participation-level entry in a category he is playing up does not count.
 function siblingGoing(e, ctx) {
     if (!ctx.sibling) return false;
+    const sibPrimary = primaryCategory(ctx.sibling.birth_year);
     return ctx.events.some((x) => x.tournament === e.tournament && String(x.start_date).slice(0, 7) === String(e.start_date).slice(0, 7)
-        && (NATIONAL.has(x.tier) || (x.projections?.[ctx.sibling.name]?.points_exp || 0) >= 20));
+        && (NATIONAL.has(x.tier)
+            || (x.category === sibPrimary && (x.projections?.[ctx.sibling.name]?.points_exp || 0) >= 20)
+            || (x.category !== sibPrimary && (x.projections?.[ctx.sibling.name]?.points_exp || 0) >= 30 && x.travel !== 'fly')));
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +338,11 @@ function eventRow(e, i, ctx, refreshed, group) {
     }
     const note = [];
     if (group === 'addon' && ctx.sibling) note.push(`${ctx.sibling.name} is going. ${e.travel === 'fly' ? `Add his fare, about ${money(cost.flight_pp * 2)} return,` : 'No extra travel,'} plus the entry.`);
+    if (e.tier === 'syc' && (e.category === 'y12' || e.category === 'y14') && group !== 'skip') {
+        const best = ctx.events.filter((x) => x.category === e.category && x.tier === 'syc' && x.group !== 'skip').sort((a, b) => (b.projections[name]?.points_exp || 0) - (a.projections[name]?.points_exp || 0))[0];
+        if (best && best !== e) note.push(`Only one SYC counts; ${best.tournament} is the better bet. This one is insurance if that weekend goes badly.`);
+        else if (best === e) note.push('The SYC that counts, on today\'s fields.');
+    }
     if (cost.live) note.push(`Fare is live from the Travel screen: ${money(cost.flight_pp)} per person each way.`);
     else if (e.travel === 'fly' && group !== 'addon') note.push(`Fare estimated at ${money(cost.flight_pp)} per person one way.`);
     if (cost.nights && group !== 'addon') note.push(`${cost.nights} night${cost.nights > 1 ? 's' : ''} at ${money(cost.hotel_night)}.`);
