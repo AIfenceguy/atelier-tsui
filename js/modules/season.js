@@ -250,10 +250,15 @@ function pointsPlanCard(profile, cat, rows, ctx) {
         const syc = rows.filter((e) => e.tier === 'syc' && e.group !== 'skip').sort((a, b) => P(b) - P(a));
         const nat = rows.filter((e) => NATIONAL.has(e.tier) && e.group !== 'skip').sort((a, b) => P(b) - P(a));
         const cadetNat = cat === 'y14' ? ctx.events.filter((e) => e.category === 'cadet' && NATIONAL.has(e.tier) && e.group !== 'skip').sort((a, b) => P(b) - P(a)) : [];
+        // Best four results count, at most one of them an SYC: the SYC slot
+        // plus the three best national results, whichever category they come from.
+        const pool = [
+            ...nat.map((e) => ({ name: e.tier === 'nationals' ? 'Summer Nationals' : 'NAC', ev: e })),
+            ...cadetNat.map((e) => ({ name: 'Cadet national, counts for Y14', ev: e }))
+        ].sort((a, b) => P(b.ev) - P(a.ev));
         if (syc[0]) slots.push({ name: 'One SYC counts', ev: syc[0], alt: syc[1] });
-        for (const e of nat.slice(0, 3)) slots.push({ name: e.tier === 'nationals' ? 'Summer Nationals' : 'NAC', ev: e });
-        for (const e of cadetNat.slice(0, 2)) slots.push({ name: 'Cadet national result, counts for Y14', ev: e });
-        const total = slots.map((s) => P(s.ev)).sort((a, b) => b - a).slice(0, 4).reduce((a, b) => a + b, 0);
+        for (const s of pool.slice(0, syc[0] ? 3 : 4)) slots.push(s);
+        const total = slots.reduce((a, s) => a + P(s.ev), 0);
         wrap.appendChild(serif(`${Math.round(total)} points projected`, '26px', total >= 150 ? GOOD : INK));
         wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '2px 0 10px', lineHeight: '1.5' } }, [
             `Best four results count: one SYC at most, the rest from NACs and Summer Nationals${cat === 'y14' ? ', and national Cadet results count too' : ''}. Regional youth events pay no national points.`
