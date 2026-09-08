@@ -1,20 +1,19 @@
-// Season plan — which events are worth the money, for each boy, in one place
-// with the flights.
+// Season plan — which events are worth the money, for each boy, and why.
 //
-// The question a parent actually asks is not "how strong is he" but "if we
-// spend the weekend and the fare, what do we get back". This screen answers
-// it per event: the field that is really registered, where each boy seeds in
-// it on his recent form, the finish the bracket simulation expects, the
-// national points that finish is worth under the 2026-27 rules, and what the
-// trip costs from Rowland Heights. Points per dollar is the ranking. A watched
-// fare from the Travel screen replaces the estimate the moment one exists.
+// A parent does not want a ranked list of sixty weekends. They want to know
+// which weekends fill the season's points slots, which are cheap points,
+// which build confidence, which are for development, which only make sense
+// because the family is already there, and which to skip. So every event is
+// sorted into one of those intentions, per fencer, per category, and each
+// category the boy is chasing gets a points plan: the counting rule, the
+// slots, the event that fills each slot, the projected total.
 //
 // Two sources feed the fields. The season table carries the 8 September
 // snapshot for every event on the calendar. An event a member adds here is
 // refreshed on demand through the refresh-event function - the entry list and
-// each entrant's strength trend, read once and cached - and is then scored
-// live in the browser (lib/season-model.js), opponents tilted by their own
-// 90-day trend the same way the boys are seeded on theirs.
+// each entrant's placings and strength trend, read once and cached - and is
+// then scored live in the browser (lib/season-model.js), opponents tilted by
+// their own 90-day form the same way the boys are seeded on theirs.
 
 import { el, toast } from '../lib/util.js';
 import { supa } from '../lib/supa.js';
@@ -22,11 +21,6 @@ import { activeProfile } from '../lib/state.js';
 import { safeWrite } from '../lib/offline.js';
 import { forecast, tierOf, categoryOf } from '../lib/season-model.js';
 import { estimateTrip, withLiveFare } from '../lib/trip-cost.js';
-
-// Set once per mount: the family's home and the geocoded venue cities, so a
-// trip is priced from their door rather than from the stored estimate.
-let HOME = null;
-let PLACES = new Map();
 
 const INK = 'var(--ink)';
 // Literal: var(--ink-mute) composites below AA on the cream surface.
@@ -40,6 +34,17 @@ const CAT_LABEL = { y12: 'Y12', y14: 'Y14', cadet: 'Cadet', junior: 'Junior' };
 const TIER_LABEL = { ryc: 'RYC', syc: 'SYC', rjcc: 'RJCC', regional: 'Regional', sjcc: 'SJCC', nac: 'NAC', jo: 'Junior Olympics', nationals: 'Summer Nationals', other: 'Regional' };
 const catLabel = (c) => CAT_LABEL[String(c || '').toLowerCase()] || String(c || '').toUpperCase();
 const tierLabel = (t) => TIER_LABEL[String(t || '').toLowerCase()] || String(t || '').toUpperCase();
+const NATIONAL = new Set(['nac', 'jo', 'nationals', 'sjcc']);
+
+// The intentions, in the order a parent reads them.
+const GROUPS = [
+    ['anchor', 'Season anchors · national points', 'NACs, Junior Olympics and Nationals. The family goes; these fill the national slots.'],
+    ['value', 'Best value for points', 'Real points for the money. Sorted by points per hundred dollars.'],
+    ['confidence', 'Confidence builders · no national points', 'Regional youth events he would seed to win. Nothing counts nationally; what counts is winning on a Sunday.'],
+    ['challenge', 'Challenging · development', 'Fields where he is mid-pack: the bouts that teach, with little on the scoreboard.'],
+    ['addon', 'Only if already there', 'His brother is going. His cost is a fare and an entry, and the pressure is low.'],
+    ['skip', 'Not worth going', 'Expensive for what comes back, or the wrong category for him right now.']
+];
 
 const label = (text, color = INK_MUTE, extra = {}) =>
     el('div', { class: 'label', style: { color, ...extra } }, [text]);
@@ -55,10 +60,24 @@ const fmtRange = (a, b) => (!b || b === a) ? fmtDay(a)
     : fmtDay(a) + ' – ' + day(b).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 const pct = (x) => x == null ? '—' : Math.round(x * 100) + '%';
 function ordinal(n) { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); }
-
 function stat(lbl, value, color = INK) {
-    return el('div', { style: { minWidth: '84px' } }, [label(lbl), el('div', {}, [num(String(value ?? '—'), color)])]);
+    return el('div', { style: { minWidth: '76px' } }, [label(lbl), el('div', {}, [num(String(value ?? '—'), color, '18px')])]);
 }
+
+// Set once per mount: the family's home and the geocoded venue cities.
+let HOME = null;
+let PLACES = new Map();
+
+// USA Fencing age categories for the 2026-27 season, by birth year. The
+// youngest category he is eligible for is his own; anything older is playing up.
+function primaryCategory(birthYear) {
+    if (!birthYear) return null;
+    if (birthYear >= 2014) return 'y12';
+    if (birthYear >= 2012) return 'y14';
+    if (birthYear >= 2010) return 'cadet';
+    return 'junior';
+}
+const catRank = (c) => CAT_ORDER.indexOf(c);
 
 // The strength to seed him on: his 90-day performance when there are enough
 // bouts to trust it, else 180 days, else the official number.
@@ -84,7 +103,7 @@ export async function mountSeason(root) {
     body.appendChild(el('div', { class: 'empty' }, [el('p', { class: 'empty-line' }, ['Reading the fields…'])]));
 
     const today = new Date().toISOString().slice(0, 10);
-    const [tsRes, evRes, watchRes, priceRes, boutRes, refreshRes, mineRes, homeRes, runRes] = await Promise.all([
+    const [tsRes, evRes, watchRes, priceRes, boutRes, refreshRes, mineRes, homeRes, runRes, sibRes] = await Promise.all([
         supa.from('true_strength').select('*').eq('profile_id', profile.id),
         supa.from('season_events').select('*').gte('start_date', today).order('start_date'),
         supa.from('flight_watches').select('id,label,destination,depart_date,return_date,hotel_nightly_rate,booked_out_cash,booked_ret_cash,passengers').is('deleted_at', null),
@@ -93,7 +112,8 @@ export async function mountSeason(root) {
         supa.from('event_refresh').select('*'),
         supa.from('member_events').select('*').eq('profile_id', profile.id),
         supa.from('household').select('*').maybeSingle(),
-        supa.from('refresh_runs').select('finished_at,events_done,pages').not('finished_at', 'is', null).order('id', { ascending: false }).limit(1).maybeSingle()
+        supa.from('refresh_runs').select('finished_at,events_done,pages').not('finished_at', 'is', null).order('id', { ascending: false }).limit(1).maybeSingle(),
+        supa.from('profiles').select('id,name,birth_year,strength_de,strength_pool,tracker_id').eq('kind', 'fencer')
     ]);
     body.innerHTML = '';
     if (runRes?.data?.finished_at) {
@@ -102,7 +122,6 @@ export async function mountSeason(root) {
         ]));
     }
 
-    // Price from home when a home is set; venue cities come from the geocode cache.
     HOME = homeRes.data?.home_lat != null ? { lat: homeRes.data.home_lat, lng: homeRes.data.home_lng, city: homeRes.data.home_city, hotel_night: homeRes.data.hotel_night } : null;
     PLACES = new Map();
     if (HOME) {
@@ -120,6 +139,8 @@ export async function mountSeason(root) {
     const watches = watchRes.data || [];
     const latestPrice = {};
     for (const p of priceRes.data || []) if (!latestPrice[p.watch_id]) latestPrice[p.watch_id] = p;
+    const siblings = (sibRes.data || []).filter((s) => s.id !== profile.id);
+    const sibling = siblings[0] || null;
 
     // Events: the season table, plus anything this member added that is not on it.
     let events = (evRes.data || []).filter((e) => e.projections && e.projections[profile.name]);
@@ -135,29 +156,213 @@ export async function mountSeason(root) {
             projections: { [profile.name]: { points_exp: null, seed_form: null, p8: null, p16: null, exp: null, pending: true } }, member_added: true
         });
     }
-
-    // Live forecasts for any event that has been refreshed on demand.
     await applyLiveForecasts(events, refreshed, profile, myForm);
     events = events.filter((e) => e.projections[profile.name]).sort((a, b) => String(a.start_date).localeCompare(String(b.start_date)));
 
-    body.appendChild(strengthCard(profile, ts, myForm));
-    body.appendChild(bestTrips(profile, events, watches, latestPrice));
-    body.appendChild(howToRead());
-    body.appendChild(addEventCard(profile));
+    // Cost per trip (this fencer's own days at that tournament), then intentions.
+    const ctx = { profile, sibling, ts90: ts[90], primary: primaryCategory(profile.birth_year), watches, latestPrice, events };
+    for (const e of events) { e.cost = tripCost(e, ctx); e.group = classify(e, ctx); }
 
-    const cats = [...new Set(events.map((e) => e.category))].filter(Boolean)
-        .sort((a, b) => CAT_ORDER.indexOf(a) - CAT_ORDER.indexOf(b));
-    for (const cat of cats) {
-        body.appendChild(categoryPlan(profile, cat, events.filter((e) => e.category === cat), watches, latestPrice, refreshed));
+    body.appendChild(strengthCard(profile, ts, myForm));
+    const chasing = CAT_ORDER.filter((c) => c !== 'junior' && events.some((e) => e.category === c));
+    for (const cat of chasing) body.appendChild(pointsPlanCard(profile, cat, events.filter((e) => e.category === cat), ctx));
+    for (const [key, title, sub] of GROUPS) {
+        const rows = events.filter((e) => e.group === key);
+        if (rows.length) body.appendChild(groupCard(key, title, sub, rows, ctx, refreshed));
     }
-    if (!cats.length) {
-        body.appendChild(el('div', { class: 'empty' }, [el('p', { class: 'empty-line' }, ['No upcoming events have been evaluated for this fencer yet. Add one below.'])]));
-    }
+    body.appendChild(howToRead(profile, sibling));
+    body.appendChild(addEventCard(profile));
     body.appendChild(recentBouts(boutRes.data || [], profile));
 }
 
 // ---------------------------------------------------------------------------
-// Live scoring from the on-demand cache: entrants + each fencer's trend.
+// Intention: which group an event belongs in for this fencer.
+// ---------------------------------------------------------------------------
+function classify(e, ctx) {
+    const p = e.projections[ctx.profile.name] || {};
+    if (p.pending) return 'anchor';
+    const pts = p.points_exp || 0;
+    const ppd = e.cost?.total > 0 ? pts / e.cost.total * 100 : null;
+    const playingUp = ctx.primary && catRank(e.category) > catRank(ctx.primary);
+    const formDown = ctx.ts90 && ctx.ts90.vs_weaker >= 6 && ctx.ts90.losses_vs_weaker / ctx.ts90.vs_weaker >= 0.3;
+    const sibGoing = siblingGoing(e, ctx);
+
+    if (NATIONAL.has(e.tier)) {
+        // A national event is an anchor when it can fill a slot: his own
+        // category, or a cadet national result that counts for Y14.
+        if (!playingUp || e.category === 'cadet' && ctx.primary === 'y14') return pts >= 3 ? 'anchor' : 'skip';
+        return sibGoing ? 'addon' : 'skip';
+    }
+    if (playingUp && formDown) return sibGoing && pts >= 8 ? 'addon' : 'skip';
+    if (pts >= 20 && (ppd == null || ppd >= 3)) return 'value';
+    if (pts >= 20) return sibGoing ? 'addon' : 'value';
+    if (e.tier === 'ryc' && p.seed_form <= 3 && p.p8 >= 0.8) return 'confidence';
+    if (sibGoing && pts >= 8) return 'addon';
+    if (p.field_n >= 8 && p.seed_form <= Math.max(8, Math.ceil(p.field_n / 2)) && p.p16 >= 0.2 && !playingUp) return 'challenge';
+    if (p.field_n >= 8 && p.seed_form <= Math.ceil(p.field_n / 2) && playingUp && !formDown) return 'challenge';
+    return 'skip';
+}
+
+// Is the brother going to this tournament anyway? He is when he has an anchor
+// there, or an event worth real points.
+function siblingGoing(e, ctx) {
+    if (!ctx.sibling) return false;
+    return ctx.events.some((x) => x.tournament === e.tournament && String(x.start_date).slice(0, 7) === String(e.start_date).slice(0, 7)
+        && (NATIONAL.has(x.tier) || (x.projections?.[ctx.sibling.name]?.points_exp || 0) >= 20));
+}
+
+// ---------------------------------------------------------------------------
+// Points plan: the counting rule for the category, the slots, and the event
+// that fills each one.
+// ---------------------------------------------------------------------------
+function pointsPlanCard(profile, cat, rows, ctx) {
+    const name = profile.name;
+    const P = (e) => e.projections[name]?.points_exp || 0;
+    const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
+    const playingUp = ctx.primary && catRank(cat) > catRank(ctx.primary);
+    const formDown = ctx.ts90 && ctx.ts90.vs_weaker >= 6 && ctx.ts90.losses_vs_weaker / ctx.ts90.vs_weaker >= 0.3;
+    wrap.appendChild(label(`${catLabel(cat)} · points plan${playingUp ? ' · playing up' : ''}`));
+
+    const slots = [];
+    if (cat === 'y12' || cat === 'y14') {
+        const syc = rows.filter((e) => e.tier === 'syc' && e.group !== 'skip').sort((a, b) => P(b) - P(a));
+        const nat = rows.filter((e) => NATIONAL.has(e.tier) && e.group !== 'skip').sort((a, b) => P(b) - P(a));
+        const cadetNat = cat === 'y14' ? ctx.events.filter((e) => e.category === 'cadet' && NATIONAL.has(e.tier) && e.group !== 'skip').sort((a, b) => P(b) - P(a)) : [];
+        if (syc[0]) slots.push({ name: 'One SYC counts', ev: syc[0], alt: syc[1] });
+        for (const e of nat.slice(0, 3)) slots.push({ name: e.tier === 'nationals' ? 'Summer Nationals' : 'NAC', ev: e });
+        for (const e of cadetNat.slice(0, 2)) slots.push({ name: 'Cadet national result, counts for Y14', ev: e });
+        const total = slots.map((s) => P(s.ev)).sort((a, b) => b - a).slice(0, 4).reduce((a, b) => a + b, 0);
+        wrap.appendChild(serif(`${Math.round(total)} points projected`, '26px', total >= 150 ? GOOD : INK));
+        wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '2px 0 10px', lineHeight: '1.5' } }, [
+            `Best four results count: one SYC at most, the rest from NACs and Summer Nationals${cat === 'y14' ? ', and national Cadet results count too' : ''}. Regional youth events pay no national points.`
+        ]));
+    } else if (cat === 'cadet') {
+        const all = rows.filter((e) => e.group !== 'skip').sort((a, b) => P(b) - P(a)).slice(0, 6);
+        for (const e of all) slots.push({ name: NATIONAL.has(e.tier) ? tierLabel(e.tier) : 'Regional', ev: e });
+        const total = all.reduce((a, e) => a + P(e), 0);
+        wrap.appendChild(serif(`${Math.round(total)} points projected`, '26px', total >= 150 ? GOOD : INK));
+        wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '2px 0 10px', lineHeight: '1.5' } }, [
+            'Best six results count, and regional Cadet events (RJCC, RCC) count nationally this season: a top 8 is 36.6, top 16 is 31.2, anywhere in the top 64 is 22.2. A Challenger-bracket NAC top 64 is 31.8.'
+        ]));
+    }
+    if (playingUp && formDown) {
+        wrap.appendChild(el('p', { style: { color: WARN, fontSize: '13px', margin: '0 0 10px', lineHeight: '1.5', fontWeight: '700' } }, [
+            `He is playing up here while losing ${ctx.ts90.losses_vs_weaker} of ${ctx.ts90.vs_weaker} bouts to weaker fencers in his own category. The points below are real, but each one costs a bracket of losses. Fill this category only as an add-on to trips the family is making anyway.`
+        ]));
+    }
+    if (!slots.length) {
+        wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '13px', margin: 0 } }, ['Nothing on the calendar fills a slot here yet.']));
+        return wrap;
+    }
+    const grid = el('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(120px, 1fr) 2fr auto', columnGap: '12px', rowGap: '6px', alignItems: 'baseline' } });
+    for (const s of slots) {
+        const p = s.ev.projections[name];
+        grid.appendChild(label(s.name, INK_MUTE));
+        grid.appendChild(el('div', { style: { fontSize: '14px', color: INK } }, [
+            el('b', {}, [s.ev.tournament]), el('span', { class: 'label', style: { color: INK_MUTE, marginLeft: '6px' } }, [`${fmtDay(s.ev.start_date)} · seed ${p.seed_form} · ${ordinal(p.median || Math.round(p.exp))}`]),
+            s.alt ? el('div', { class: 'label', style: { color: INK_MUTE } }, [`backup: ${s.alt.tournament}, ${Math.round(P(s.alt))} pts`]) : null
+        ].filter(Boolean)));
+        grid.appendChild(num(Math.round(P(s.ev)).toString(), P(s.ev) >= 30 ? GOOD : INK, '18px'));
+    }
+    wrap.appendChild(grid);
+    return wrap;
+}
+
+// ---------------------------------------------------------------------------
+// One intention group, its events inside.
+// ---------------------------------------------------------------------------
+function groupCard(key, title, sub, rows, ctx, refreshed) {
+    const name = ctx.profile.name;
+    const P = (e) => e.projections[name]?.points_exp || 0;
+    const ppd = (e) => e.cost?.total > 0 ? P(e) / e.cost.total * 100 : -1;
+    const sorted = key === 'value' ? rows.slice().sort((a, b) => ppd(b) - ppd(a))
+        : key === 'skip' ? rows.slice().sort((a, b) => String(a.start_date).localeCompare(String(b.start_date)))
+        : rows.slice().sort((a, b) => String(a.start_date).localeCompare(String(b.start_date)));
+    const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
+    wrap.appendChild(label(`${rows.length} event${rows.length > 1 ? 's' : ''}`));
+    wrap.appendChild(serif(title, '24px', key === 'skip' ? INK_MUTE : INK));
+    wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '13px', margin: '4px 0 8px', lineHeight: '1.5' } }, [sub]));
+    const list = el('div', {});
+    const render = (limit) => {
+        list.innerHTML = '';
+        sorted.slice(0, limit).forEach((e, i) => list.appendChild(eventRow(e, i, ctx, refreshed, key)));
+    };
+    if (key === 'skip') {
+        const btn = el('button', { class: 'btn btn-ghost btn-sm btn-mono-label' }, [`Show the ${rows.length}`]);
+        btn.onclick = () => { render(rows.length); btn.remove(); };
+        wrap.appendChild(btn);
+    } else render(rows.length);
+    wrap.appendChild(list);
+    return wrap;
+}
+
+function eventRow(e, i, ctx, refreshed, group) {
+    const name = ctx.profile.name;
+    const p = e.projections[name] || {};
+    const cost = e.cost || { total: 0 };
+    const pts = p.points_exp || 0;
+    const ppd = cost.total > 0 && p.points_exp != null ? pts / cost.total * 100 : null;
+    const finishColor = p.p8 >= 0.6 ? GOOD : p.p16 >= 0.5 ? INK : WARN;
+    const row = el('div', { style: { padding: '12px 0', borderTop: i === 0 ? '1px solid var(--rule)' : '1px solid var(--rule)', display: 'grid', gridTemplateColumns: '1fr', gap: '6px' } });
+    row.appendChild(el('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' } }, [
+        el('div', { style: { fontFamily: 'var(--serif)', fontStyle: 'italic', fontWeight: '600', fontSize: '19px', color: INK } }, [e.tournament]),
+        el('span', { class: 'label', style: { color: INK_MUTE } }, [`${catLabel(e.category)} · ${tierLabel(e.tier)} · ${fmtRange(e.start_date, e.end_date)}${p.live ? ' · live' : ''}`])
+    ]));
+    const travelWord = e.travel === 'local' ? 'drive, no hotel' : e.travel === 'drive' ? 'drive' : e.travel === 'fly' ? 'fly' : '';
+    row.appendChild(el('div', { class: 'label', style: { color: INK_MUTE } }, [[e.city, e.venue, travelWord].filter(Boolean).join(' · ') || 'City not set']));
+    if (p.pending) {
+        row.appendChild(el('p', { style: { color: WARN, fontSize: '13px', margin: '2px 0 0' } }, ['Field not read yet.']));
+    } else {
+        const stats = [
+            stat('Field', `${e.entrants ?? p.field_n ?? '—'}`),
+            stat('Seed', `${p.seed_form}` + (p.seed_official && p.seed_official !== p.seed_form ? ` (${p.seed_official})` : ''), p.seed_form <= 8 ? GOOD : INK),
+            ...(p.seed_pool ? [stat('By pools', `${p.seed_pool}`, p.seed_pool > p.seed_form + 4 ? WARN : INK)] : []),
+            stat('Expected', ordinal(Math.round(p.median || p.exp)), finishColor),
+            stat('Top 8', pct(p.p8), p.p8 >= 0.6 ? GOOD : INK),
+            stat('Points', p.points_exp == null ? '—' : pts.toFixed(0), pts >= 25 ? GOOD : INK)
+        ];
+        if (group === 'addon' && cost.marginal != null) stats.push(stat('His cost', money(cost.marginal), GOOD));
+        else stats.push(stat('Trip', cost.total > 0 ? money(cost.total) : '—', cost.live ? GOOD : INK));
+        if (group === 'value' || group === 'anchor') stats.push(stat('Pts / $100', ppd == null ? '—' : ppd.toFixed(1), ppd >= 5 ? GOOD : INK));
+        row.appendChild(el('div', { style: { display: 'flex', gap: '14px', flexWrap: 'wrap', marginTop: '2px' } }, stats));
+    }
+    const note = [];
+    if (group === 'addon' && ctx.sibling) note.push(`${ctx.sibling.name} is going. ${e.travel === 'fly' ? `Add his fare, about ${money(cost.flight_pp * 2)} return,` : 'No extra travel,'} plus the entry.`);
+    if (cost.live) note.push(`Fare is live from the Travel screen: ${money(cost.flight_pp)} per person each way.`);
+    else if (e.travel === 'fly' && group !== 'addon') note.push(`Fare estimated at ${money(cost.flight_pp)} per person one way.`);
+    if (cost.nights && group !== 'addon') note.push(`${cost.nights} night${cost.nights > 1 ? 's' : ''} at ${money(cost.hotel_night)}.`);
+    if (p.live && p.trend) {
+        const bits = Object.entries(p.trend).filter(([, v]) => v).map(([k, v]) => `${v} ${k}`);
+        if (bits.length) note.push(`Registered field on their 90-day trend: ${bits.join(', ')}.`);
+    } else if (e.plan_note && group !== 'skip') note.push(e.plan_note);
+    if (note.length) row.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '2px 0 0', lineHeight: '1.5' } }, [note.join(' ')]));
+
+    if (p.live && p.neighbours?.length && group !== 'skip') {
+        row.appendChild(label('Around his seed · their recent form', INK_MUTE, { marginTop: '6px' }));
+        row.appendChild(el('div', { style: { display: 'grid', gridTemplateColumns: '1fr', gap: '4px', marginTop: '2px' } }, p.neighbours.map((n) => {
+            const col = n.tag === 'rising' ? WARN : n.tag === 'fading' || n.tag === 'inactive' ? GOOD : INK;
+            return el('div', { style: { display: 'flex', gap: '8px', alignItems: 'baseline', flexWrap: 'wrap' } }, [
+                el('a', { href: `https://fencingtracker.com/p/${n.tracker_id}/x`, target: '_blank', rel: 'noopener', style: { color: INK, fontSize: '14px', fontWeight: n.tag === 'rising' ? '700' : '500', textDecoration: 'none' } }, [n.name]),
+                el('span', { class: 'num', style: { color: INK, fontSize: '13px' } }, [String(n.strength)]),
+                n.tag !== 'steady' ? el('span', { class: 'label', style: { color: col, fontWeight: '700' } }, [n.tag]) : null,
+                el('span', { class: 'label', style: { color: INK_MUTE } }, [n.form || ''])
+            ].filter(Boolean));
+        })));
+    }
+    if (e.ft_event_id && group !== 'skip') {
+        const rb = el('button', { class: 'btn btn-ghost btn-sm btn-mono-label', style: { marginTop: '6px', justifySelf: 'start' } }, [refreshed.has(Number(e.ft_event_id)) ? 'Re-read the field' : 'Read the live field']);
+        rb.onclick = async () => {
+            rb.disabled = true; rb.textContent = 'Reading…';
+            try { await refreshEvent(Number(e.ft_event_id), (msg) => { rb.textContent = msg; }, refreshed.has(Number(e.ft_event_id))); location.reload(); }
+            catch (err) { rb.disabled = false; rb.textContent = 'Read the live field'; toast('Could not read: ' + (err.message || err), 'error'); }
+        };
+        row.appendChild(rb);
+    }
+    return row;
+}
+
+// ---------------------------------------------------------------------------
+// Live scoring from the on-demand cache: entrants + each fencer's windows.
 // ---------------------------------------------------------------------------
 async function applyLiveForecasts(events, refreshed, profile, myForm) {
     const liveIds = events.map((e) => Number(e.ft_event_id)).filter((id) => id && refreshed.has(id));
@@ -177,15 +382,14 @@ async function applyLiveForecasts(events, refreshed, profile, myForm) {
         if (!list || !e.category) continue;
         const f = forecast({ entrants: list, snapshots: snaps, myStrength: myForm, myOfficial: profile.strength_de ?? myForm, myPool: profile.strength_pool ?? null, myTrackerId: profile.tracker_id, category: e.category, tier: e.tier });
         if (!f) continue;
-        const prev = e.projections[profile.name] || {};
-        e.projections[profile.name] = { ...prev, ...f, pending: false };
+        e.projections[profile.name] = { ...(e.projections[profile.name] || {}), ...f, pending: false };
         e.entrants = list.length;
         e.refreshed_at = refreshed.get(Number(e.ft_event_id))?.last_refreshed_at;
     }
 }
 
 // ---------------------------------------------------------------------------
-// Strength: official, and what the last 90 / 180 days of bouts say.
+// Strength: official, and what the last 3 and 6 months of bouts say.
 // ---------------------------------------------------------------------------
 function strengthCard(profile, ts, myForm) {
     const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
@@ -200,8 +404,6 @@ function strengthCard(profile, ts, myForm) {
     wrap.appendChild(el('div', { class: 'label', style: { color: INK_MUTE, margin: '2px 0 10px' } }, [
         `Official DE strength ${de ?? '—'} · pool strength ${pool ?? '—'} · seeded on this screen at ${myForm}`
     ]));
-
-    // The two windows side by side: the same columns, so the eye compares.
     const rowsSpec = [
         ['Performance', (t) => t.performance_rating, (t) => t.perf_minus_official >= 60 ? GOOD : t.perf_minus_official <= -60 ? BAD : INK],
         ['vs official', (t) => (t.perf_minus_official > 0 ? '+' : '') + t.perf_minus_official, (t) => t.perf_minus_official >= 60 ? GOOD : t.perf_minus_official <= -60 ? BAD : INK],
@@ -209,7 +411,8 @@ function strengthCard(profile, ts, myForm) {
         ['Beat stronger', (t) => `${t.wins_vs_stronger} of ${t.vs_stronger}`, (t) => t.wins_vs_stronger > 0 ? GOOD : INK],
         ['Lost to weaker', (t) => `${t.losses_vs_weaker} of ${t.vs_weaker}`, (t) => t.losses_vs_weaker > t.vs_weaker * 0.25 ? BAD : INK],
         ['Best win', (t) => t.best_win_strength ?? '—', () => GOOD],
-        ['Worst loss', (t) => t.worst_loss_strength ?? '—', () => BAD]
+        ['Worst loss', (t) => t.worst_loss_strength ?? '—', () => BAD],
+        ['Bouts', (t) => t.bouts, () => INK]
     ];
     const grid = el('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(92px, 1.2fr) 1fr 1fr', columnGap: '12px', rowGap: '6px', alignItems: 'baseline' } });
     grid.appendChild(el('span', {}, ['']));
@@ -217,58 +420,45 @@ function strengthCard(profile, ts, myForm) {
     grid.appendChild(label('Last 6 months', INK, { fontWeight: '700' }));
     const t90 = ts[90], t180 = ts[180];
     const cell = (t, get, col) => t && t.bouts ? num(String(get(t)), col(t), '18px') : el('span', { class: 'label', style: { color: INK_MUTE } }, ['—']);
-    for (const [lbl, get, col] of rowsSpec) {
-        grid.appendChild(label(lbl));
-        grid.appendChild(cell(t90, get, col));
-        grid.appendChild(cell(t180, get, col));
-    }
-    grid.appendChild(label('Bouts'));
-    grid.appendChild(cell(t90, (t) => t.bouts, () => INK));
-    grid.appendChild(cell(t180, (t) => t.bouts, () => INK));
+    for (const [lbl, get, col] of rowsSpec) { grid.appendChild(label(lbl)); grid.appendChild(cell(t90, get, col)); grid.appendChild(cell(t180, get, col)); }
     wrap.appendChild(grid);
-
-    // Pools decide the seed; the seed decides the bracket.
     if (de && pool) {
         const g = de - pool;
         wrap.appendChild(el('p', { style: { color: g >= 200 ? WARN : INK, fontSize: '13px', margin: '12px 0 0', lineHeight: '1.5', fontWeight: g >= 200 ? '700' : '500' } }, [
-            g >= 200
-                ? `Pools trail his DE by ${g} points. He is drawn into brackets as a weaker fencer than he is, and meets the top seeds a round early.`
+            g >= 200 ? `Pools trail his DE by ${g} points. He is drawn into brackets as a weaker fencer than he is, and meets the top seeds a round early.`
                 : g <= -100 ? `Pools run ${-g} ahead of his DE: he seeds well, then gives it back in the bracket. The work is in the 15-touch bout.`
                 : 'Pools and DE are in step; his seed matches how he fences.'
         ]));
     }
-    wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '10px 0 0', lineHeight: '1.5' } }, [
-        'Performance is the strength that best explains his wins and losses against opponents of known strength, on the same scale FencingTracker uses. Every registered opponent below gets the same two windows from their own results.'
-    ]));
     return wrap;
 }
 
-function howToRead() {
+function howToRead(profile, sibling) {
     return el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } }, [
         label('How to read the plan'),
         el('p', { style: { color: INK, fontSize: '13px', margin: '6px 0 0', lineHeight: '1.55' } }, [
-            el('b', {}, ['Field']), ' is who is registered. Events marked live were read on demand and score every opponent on their own 90-day trend; the rest use the 8 September snapshot. ',
-            el('b', {}, ['Seed']), ' is his place in that field on form strength, official seed in brackets. ',
+            el('b', {}, ['Field']), ' is who is registered. Events marked live were read on demand; the rest use the nightly snapshot. ',
+            el('b', {}, ['Seed']), ' is his place in that field on form strength, official seed in brackets; ', el('b', {}, ['by pools']), ' is where his pool strength would draw him. ',
             el('b', {}, ['Expected']), ' is the median finish of a simulated bracket. ',
             el('b', {}, ['Points']), ' are national points for that finish under the 2026-27 tables, weighted by how likely each finish is. ',
-            el('b', {}, ['Trip']), ' is fare for two, hotel nights and entries from Rowland Heights; a live fare from the Travel screen replaces the estimate. ',
+            el('b', {}, ['Trip']), ` is fare for two, hotel nights and entries from ${HOME?.city || 'home'}; a live fare from the Travel screen replaces the estimate. `,
+            sibling ? `Where ${sibling.name} is going anyway, ${profile.name}'s cost is shown as his fare and entry only. ` : '',
             'Cadet regionals count toward national points this season. Youth RYCs do not; only SYCs and NACs do, and only one SYC counts.'
         ])
     ]);
 }
 
 // ---------------------------------------------------------------------------
-// Add an event: paste the FencingTracker event link. The entry list and each
-// entrant's trend are read once, on demand, then scored here.
+// Add an event: paste the FencingTracker link.
 // ---------------------------------------------------------------------------
 function addEventCard(profile) {
     const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
     wrap.appendChild(label('Add an event'));
     wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '13px', margin: '6px 0 10px', lineHeight: '1.5' } }, [
-        'Paste the FencingTracker link of the event he is registered for (fencingtracker.com/event/…). The entry list is read once and every registered fencer is scored on their recent trend.'
+        'Paste the FencingTracker link of the event he is registered for (fencingtracker.com/event/…). The entry list is read once and every registered fencer is scored on their recent form.'
     ]));
-    const input = el('input', { type: 'text', class: 'field-input', placeholder: 'https://fencingtracker.com/event/12345', autocomplete: 'off' });
-    const cat = el('select', { class: 'field-input', style: { marginTop: '8px' } }, [
+    const input = el('input', { type: 'text', class: 'field-input', placeholder: 'https://fencingtracker.com/event/12345', autocomplete: 'off', style: { color: INK } });
+    const cat = el('select', { class: 'field-input', style: { marginTop: '8px', color: INK } }, [
         el('option', { value: '' }, ['Category: read from the event name']),
         ...CAT_ORDER.map((c) => el('option', { value: c }, [catLabel(c)]))
     ]);
@@ -282,10 +472,8 @@ function addEventCard(profile) {
         try {
             await safeWrite({ table: 'member_events', op: 'upsert', onConflict: 'profile_id,ft_event_id', payload: { profile_id: profile.id, ft_event_id: ftEventId, category: cat.value || null } });
             const res = await refreshEvent(ftEventId, (msg) => { status.textContent = msg; });
-            if (res?.title && !cat.value) {
-                await safeWrite({ table: 'member_events', op: 'update', match: { profile_id: profile.id, ft_event_id: ftEventId }, payload: { category: categoryOf(res.title), tournament: res.title, event_date: res.event_date } });
-            } else if (res?.title) {
-                await safeWrite({ table: 'member_events', op: 'update', match: { profile_id: profile.id, ft_event_id: ftEventId }, payload: { tournament: res.title, event_date: res.event_date } });
+            if (res?.title) {
+                await safeWrite({ table: 'member_events', op: 'update', match: { profile_id: profile.id, ft_event_id: ftEventId }, payload: { category: cat.value || categoryOf(res.title), tournament: res.title, event_date: res.event_date } });
             }
             toast(`Read ${res?.entrants ?? 0} entrants`);
             location.reload();
@@ -298,8 +486,6 @@ function addEventCard(profile) {
     return wrap;
 }
 
-// Calls the function until it reports the whole field is cached (it reads at
-// most sixty pages per call, slowly, on purpose).
 async function refreshEvent(ftEventId, onProgress, force = false) {
     let last = null;
     for (let i = 0; i < 8; i++) {
@@ -314,177 +500,39 @@ async function refreshEvent(ftEventId, onProgress, force = false) {
 }
 
 // ---------------------------------------------------------------------------
-// Trips, not events. A weekend usually has two of his categories at the same
-// venue, and a trip is paid for once, so the ranking that matters sums the
-// points of everything he can fence there against one fare and one hotel.
+// Cost for one adult and this fencer, for the days he fences at that
+// tournament; and the marginal cost when his brother is going anyway. Priced
+// from home when a home is set, else from the stored estimate. A live fare on
+// a matching watch overrides either.
 // ---------------------------------------------------------------------------
-function bestTrips(profile, events, watches, latestPrice) {
-    const boy = profile.name;
-    const trips = new Map();
-    for (const e of events) {
-        const p = e.projections[boy];
-        if (!p || p.points_exp == null) continue;
-        const key = e.tournament + '|' + String(e.start_date).slice(0, 7);
-        if (!trips.has(key)) trips.set(key, { tournament: e.tournament, city: e.city, travel: e.travel, tier: e.tier, start: e.start_date, end: e.end_date, cost: tripCost(e, watches, latestPrice), pts: 0, parts: [], live: false });
-        const t = trips.get(key);
-        t.pts += p.points_exp;
-        t.live = t.live || Boolean(p.live);
-        t.start = t.start < e.start_date ? t.start : e.start_date;
-        t.end = (t.end || '') > (e.end_date || '') ? t.end : e.end_date;
-        t.parts.push(`${catLabel(e.category)} seed ${p.seed_form}, expected ${ordinal(p.median || Math.round(p.exp))}, ${p.points_exp.toFixed(0)} pts`);
-    }
-    const ranked = [...trips.values()].filter((t) => t.pts >= 8).sort((a, b) => b.pts / Math.max(1, b.cost.total) - a.pts / Math.max(1, a.cost.total));
-    const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
-    wrap.appendChild(label('Best trips · points per dollar'));
-    wrap.appendChild(serif(ranked.length ? `${ranked.length} weekends worth going` : 'No weekend clears the bar yet', '26px', ranked.length ? INK : WARN));
-    ranked.slice(0, 12).forEach((t, i) => {
-        const ppd = t.cost.total > 0 ? t.pts / t.cost.total * 100 : null;
-        wrap.appendChild(el('div', { style: { padding: '10px 0', borderTop: i ? '1px solid var(--rule)' : 'none' } }, [
-            el('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'baseline', flexWrap: 'wrap' } }, [
-                el('div', { style: { fontFamily: 'var(--serif)', fontStyle: 'italic', fontWeight: i < 3 ? '700' : '600', fontSize: '19px', color: INK } }, [`${i + 1}. ${t.tournament}`]),
-                el('span', { class: 'label', style: { color: INK_MUTE } }, [`${fmtRange(t.start, t.end)} · ${t.city || 'city not set'} · ${t.travel === 'local' ? 'drive, no hotel' : t.travel || ''}${t.live ? ' · live field' : ''}`])
-            ]),
-            el('div', { style: { display: 'flex', gap: '16px', flexWrap: 'wrap', marginTop: '4px' } }, [
-                stat('Points', t.pts.toFixed(0), t.pts >= 60 ? GOOD : INK),
-                stat('Trip', t.cost.total > 0 ? money(t.cost.total) : 'add on Travel', t.cost.live ? GOOD : INK),
-                stat('Pts / $100', ppd == null ? '—' : ppd.toFixed(1), ppd >= 8 ? GOOD : INK)
-            ]),
-            el('div', { style: { color: INK_MUTE, fontSize: '12px', marginTop: '4px', lineHeight: '1.5' } }, [t.parts.join(' · ')])
-        ]));
-    });
-    wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '10px 0 0', lineHeight: '1.5' } }, [
-        'Trip cost is one adult and this fencer. When his brother fences the same weekend, the fare for the adult and the hotel are shared, so a trip that is marginal for one boy can be clearly worth it for two.'
-    ]));
-    return wrap;
-}
-
-// ---------------------------------------------------------------------------
-// One category: the events ranked by points per dollar, with the reasoning.
-// ---------------------------------------------------------------------------
-function categoryPlan(profile, cat, rows, watches, latestPrice, refreshed) {
-    const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
-    const boy = profile.name;
-    const ranked = rows.map((e) => {
-        const p = e.projections[boy];
-        const cost = tripCost(e, watches, latestPrice);
-        const ppd = cost.total > 0 && p.points_exp != null ? p.points_exp / cost.total * 100 : null;
-        return { e, p, cost, ppd };
-    }).sort((a, b) => (b.ppd ?? (b.p.points_exp != null ? 0 : -1)) - (a.ppd ?? (a.p.points_exp != null ? 0 : -1)));
-
-    wrap.appendChild(label(`${catLabel(cat)} · ${ranked.length} events evaluated`));
-    const worth = ranked.filter((r) => (r.p.points_exp || 0) >= 8);
-    wrap.appendChild(serif(worth.length ? `${worth.length} worth the trip` : 'Nothing worth the trip yet', '26px', worth.length ? INK : WARN));
-
-    const list = el('div', { style: { marginTop: '10px' } });
-    ranked.forEach((r, i) => list.appendChild(eventRow(r, i, profile, refreshed)));
-    wrap.appendChild(list);
-    return wrap;
-}
-
-function eventRow({ e, p, cost, ppd }, i, profile, refreshed) {
-    const finishColor = p.p8 >= 0.6 ? GOOD : p.p16 >= 0.5 ? INK : WARN;
-    const top = i < 3 && (p.points_exp || 0) >= 8;
-    const row = el('div', { style: {
-        padding: '12px 0', borderTop: i === 0 ? 'none' : '1px solid var(--rule)',
-        display: 'grid', gridTemplateColumns: '1fr', gap: '6px'
-    } });
-    row.appendChild(el('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' } }, [
-        el('div', { style: { fontFamily: 'var(--serif)', fontStyle: 'italic', fontWeight: top ? '700' : '600', fontSize: '19px', color: INK } }, [e.tournament]),
-        el('span', { class: 'label', style: { color: INK_MUTE } }, [`${tierLabel(e.tier)} · ${fmtRange(e.start_date, e.end_date)}${p.live ? ' · live' : ''}`])
-    ]));
-    const travelWord = e.travel === 'local' ? 'drive, no hotel' : e.travel === 'drive' ? 'drive' : e.travel === 'fly' ? 'fly' : '';
-    row.appendChild(el('div', { class: 'label', style: { color: INK_MUTE } }, [
-        [e.city, e.venue, travelWord].filter(Boolean).join(' · ') || 'City not set'
-    ]));
-    if (p.pending) {
-        row.appendChild(el('p', { style: { color: WARN, fontSize: '13px', margin: '2px 0 0' } }, ['Field not read yet.']));
-    } else {
-        row.appendChild(el('div', { style: { display: 'flex', gap: '16px', flexWrap: 'wrap', marginTop: '2px' } }, [
-            stat('Field', `${e.entrants ?? p.field_n ?? '—'}`),
-            stat('Seed', `${p.seed_form}` + (p.seed_official && p.seed_official !== p.seed_form ? ` (${p.seed_official})` : ''), p.seed_form <= 8 ? GOOD : INK),
-            ...(p.seed_pool ? [stat('By pools', `${p.seed_pool}`, p.seed_pool > p.seed_form + 4 ? WARN : INK)] : []),
-            stat('Expected', ordinal(Math.round(p.median || p.exp)), finishColor),
-            stat('Top 8', pct(p.p8), p.p8 >= 0.6 ? GOOD : INK),
-            stat('Top 16', pct(p.p16)),
-            stat('Points', p.points_exp == null ? '—' : p.points_exp.toFixed(1), (p.points_exp || 0) >= 25 ? GOOD : INK),
-            stat('Trip', cost.total > 0 ? money(cost.total) : '—', cost.live ? GOOD : INK),
-            stat('Pts / $100', ppd == null ? '—' : ppd.toFixed(1), ppd >= 5 ? GOOD : INK)
-        ]));
-    }
-    const note = [];
-    if (cost.live) note.push(`Fare is live from the Travel screen: ${money(cost.flight_pp)} per person each way.`);
-    else if (e.travel === 'fly') note.push(`Fare estimated at ${money(cost.flight_pp)} per person one way. Add a watch on Travel to price it.`);
-    if (cost.nights) note.push(`${cost.nights} hotel night${cost.nights > 1 ? 's' : ''} at ${money(cost.hotel_night)}.`);
-    if (p.live && p.trend) {
-        const bits = Object.entries(p.trend).filter(([, v]) => v).map(([k, v]) => `${v} ${k}`);
-        if (bits.length) note.push(`Registered field on their 90-day trend: ${bits.join(', ')}. Read ${e.refreshed_at ? new Date(e.refreshed_at).toLocaleDateString() : 'recently'}.`);
-    } else if (e.plan_note) note.push(e.plan_note);
-    if (note.length) row.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '2px 0 0', lineHeight: '1.5' } }, [note.join(' ')]));
-
-    // The fencers just above his seed, each with their own last 3 and 6 months.
-    if (p.live && p.neighbours?.length) {
-        row.appendChild(label('Around his seed · their recent form', INK_MUTE, { marginTop: '6px' }));
-        row.appendChild(el('div', { style: { display: 'grid', gridTemplateColumns: '1fr', gap: '4px', marginTop: '2px' } }, p.neighbours.map((n) => {
-            const col = n.tag === 'rising' ? WARN : n.tag === 'fading' || n.tag === 'inactive' ? GOOD : INK;
-            return el('div', { style: { display: 'flex', gap: '8px', alignItems: 'baseline', flexWrap: 'wrap' } }, [
-                el('a', { href: `https://fencingtracker.com/p/${n.tracker_id}/x`, target: '_blank', rel: 'noopener',
-                    style: { color: INK, fontSize: '14px', fontWeight: n.tag === 'rising' ? '700' : '500', textDecoration: 'none' } }, [n.name]),
-                el('span', { class: 'num', style: { color: INK, fontSize: '13px' } }, [String(n.strength)]),
-                n.tag !== 'steady' ? el('span', { class: 'label', style: { color: col, fontWeight: '700' } }, [n.tag]) : null,
-                el('span', { class: 'label', style: { color: INK_MUTE } }, [n.form || ''])
-            ].filter(Boolean));
-        })));
-    }
-
-    // On-demand refresh for any event FencingTracker lists.
-    if (e.ft_event_id) {
-        const rb = el('button', { class: 'btn btn-ghost btn-sm btn-mono-label', style: { marginTop: '6px', justifySelf: 'start' } }, [refreshed.has(Number(e.ft_event_id)) ? 'Re-read the field' : 'Read the live field']);
-        rb.onclick = async () => {
-            rb.disabled = true; rb.textContent = 'Reading…';
-            try {
-                await refreshEvent(Number(e.ft_event_id), (msg) => { rb.textContent = msg; }, refreshed.has(Number(e.ft_event_id)));
-                location.reload();
-            } catch (err) { rb.disabled = false; rb.textContent = 'Read the live field'; toast('Could not read: ' + (err.message || err), 'error'); }
-        };
-        row.appendChild(rb);
-    }
-    return row;
-}
-
-// Cost for one adult and one fencer. Priced from the family's home when one is
-// set (drive or fly by distance, flat hotel estimate), else from the stored
-// estimate. A live fare (latest observed price on a watch to the same city
-// within four days of the event) overrides either.
-function tripCost(e, watches, latestPrice) {
+function tripCost(e, ctx) {
+    const name = ctx.profile.name;
+    // The days he fences there: this category, plus any other category at the
+    // same tournament that is worth real points to him.
+    const sameTrip = (x) => x.tournament === e.tournament && String(x.start_date).slice(0, 7) === String(e.start_date).slice(0, 7);
+    const myDays = new Set(ctx.events
+        .filter((x) => sameTrip(x) && (x.category === e.category || (x.projections?.[name]?.points_exp || 0) >= 8))
+        .map((x) => String(x.start_date).slice(0, 10)));
+    myDays.add(String(e.start_date).slice(0, 10));
+    const dates = [...myDays].sort();
+    const days = NATIONAL.has(e.tier) ? Math.max(2, (e.cost_breakdown?.days || 3)) : Math.max(1, Math.round((day(dates[dates.length - 1]) - day(dates[0])) / 864e5) + 1);
+    let c = null;
     if (HOME && e.city) {
         const venue = PLACES.get(String(e.city).toLowerCase().replace(/\s+/g, ' ').trim());
-        const days = (e.cost_breakdown && e.cost_breakdown.days) || 1;
         const est = venue ? estimateTrip({ home: HOME, venue, days, tier: e.tier }) : null;
-        if (est) {
-            const c = withLiveFare({ ...est, live: false }, watches, latestPrice, e.city, e.start_date);
-            e.travel = c.travel;   // so the row says drive or fly from this home, not from the stored one
-            return c;
-        }
+        if (est) { c = withLiveFare({ ...est, live: false }, ctx.watches, ctx.latestPrice, e.city, e.start_date); e.travel = c.travel; }
     }
-    const cb = e.cost_breakdown || {};
-    if (!e.cost_breakdown && e.est_cost_two == null) return { total: 0, flight_pp: 0, nights: 0, hotel_night: 0, entries: 0, live: false };
-    let flight_pp = cb.flight_pp || 0, live = false;
-    const city = String(e.city || '').toLowerCase().split(',')[0].trim();
-    const w = city ? watches.find((x) => {
-        const near = Math.abs((day(x.depart_date) - day(e.start_date)) / 864e5) <= 4;
-        return near && String(x.label || '').toLowerCase().includes(city);
-    }) : null;
-    if (w) {
-        const lp = latestPrice[w.id];
-        const pp = lp?.effective_per_person ?? lp?.price_per_person;
-        if (pp) { flight_pp = pp / 2; live = true; }   // watches price round trips per person
-        if (w.booked_out_cash) { flight_pp = (Number(w.booked_out_cash) + Number(w.booked_ret_cash || 0)) / 2; live = true; }
+    if (!c) {
+        const cb = e.cost_breakdown || {};
+        if (!e.cost_breakdown && e.est_cost_two == null) return { total: 0, flight_pp: 0, nights: 0, hotel_night: 0, entries: 60, live: false, marginal: null };
+        const nights = e.travel === 'local' ? 0 : e.travel === 'drive' ? days : days + 1;
+        const base = { travel: e.travel, flight_pp: cb.flight_pp || 0, nights, hotel_night: cb.hotel_night ?? 160, entries: cb.entries ?? 60, drive: cb.drive ?? 0, live: false };
+        base.total = base.flight_pp * 4 + nights * base.hotel_night + base.entries + base.drive;
+        c = withLiveFare(base, ctx.watches, ctx.latestPrice, e.city, e.start_date);
     }
-    const pax = 2;
-    const nights = cb.nights ?? 0, hotel_night = cb.hotel_night ?? 160;
-    const entries = cb.entries ?? 60, drive = cb.drive ?? 0;
-    const total = flight_pp * 2 * pax + nights * hotel_night + entries + drive;
-    return { total, flight_pp, nights, hotel_night, entries, live };
+    // If the brother is going anyway, this fencer adds a fare (if flying) and his entry.
+    c.marginal = (c.travel === 'fly' ? c.flight_pp * 2 : 0) + (c.entries || 60);
+    return c;
 }
 
 function recentBouts(bouts, profile) {
