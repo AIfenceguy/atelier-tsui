@@ -1,8 +1,10 @@
-// refresh-event — read one FencingTracker event's entry list and each entrant's
-// strength page, on demand, and cache the result.
+// refresh-event — read one FencingTracker event's entry list and, for each
+// entrant whose snapshot is stale, their profile (results) and strength
+// (DE and pool over time) pages, on demand, and cache the result.
 //
 // This is the only place the app reads fencingtracker.com. It runs when a
-// member registers an event, never on a schedule, never across the site:
+// member registers an event and once a day for events already registered,
+// never across the site:
 //   - identifies itself in the User-Agent,
 //   - waits 350 ms between requests,
 //   - keeps a 7-day cache per fencer and refreshes an event at most once a day,
@@ -15,7 +17,7 @@ const UA = "EnGardeInsight/1.0 (+https://aifenceguy.github.io/en-garde-tsui; on-
 const DELAY_MS = 350;
 const MAX_PAGES = 60;
 const FRESH_DAYS = 7;
-const EVENT_REFRESH_HOURS = 24;
+const EVENT_REFRESH_HOURS = 23;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const clean = (s: string) =>
@@ -33,47 +35,67 @@ function parseEntrants(html: string): { title: string; date: string | null; entr
   const title = clean((html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/) || [, ""])[1]);
   let date = (html.match(/\b(20\d\d-\d\d-\d\d)\b/) || [])[1] || null;
   if (!date) {
-    // "Oct 17, 2026" on the entry page
     const m = html.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2}),?\s+(20\d\d)\b/);
     if (m) { const d = new Date(`${m[1]} ${m[2]}, ${m[3]} UTC`); if (!isNaN(d.getTime())) date = d.toISOString().slice(0, 10); }
   }
   const entrants: Entrant[] = [];
-  const rows = html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g);
   const seen = new Set<number>();   // the page lists some fencers twice (two tables)
   let pos = 0;
-  for (const m of rows) {
+  for (const m of html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)) {
     const row = m[1];
     const link = row.match(/href="\/p\/(\d+)\/[^"]*"[^>]*>([\s\S]*?)<\/a>/);
     if (!link) continue;
-    if (seen.has(Number(link[1]))) continue;
-    seen.add(Number(link[1]));
-    pos += 1;
+    const id = Number(link[1]);
+    if (seen.has(id)) continue;
+    seen.add(id); pos += 1;
     const nums = [...row.matchAll(/<td[^>]*>\s*(\d{3,4})\s*<\/td>/g)].map((x) => Number(x[1]));
     const club = row.match(/href="\/club\/\d+\/[^"]*"[^>]*>([\s\S]*?)<\/a>/);
     const rating = row.match(/<td class="d-none d-sm-table-cell">\s*([A-EU]\d{0,2})\s*<\/td>/);
-    entrants.push({
-      tracker_id: Number(link[1]), name: clean(link[2]), club: club ? clean(club[1]) : null,
-      rating: rating ? rating[1] : null, strength_de: nums.length ? nums[0] : null, list_pos: pos,
-    });
+    entrants.push({ tracker_id: id, name: clean(link[2]), club: club ? clean(club[1]) : null, rating: rating ? rating[1] : null, strength_de: nums.length ? nums[0] : null, list_pos: pos });
   }
   return { title, date, entrants };
 }
 
+// DE and pool strength over time from the strength page's chart data.
 function parseStrength(html: string, today: Date) {
   const m = html.match(/F:\s*\{\s*P:\s*\[([\s\S]*?)\],\s*D:\s*\[([\s\S]*?)\]/);
   if (!m) return null;
-  const D = [...m[2].matchAll(/"x":\s*"(\d{4}-\d{2}-\d{2})",\s*"y":\s*(\d+)/g)].map((x) => ({ x: x[1], y: Number(x[2]) }));
+  const pts = (s: string) => [...s.matchAll(/"x":\s*"(\d{4}-\d{2}-\d{2})",\s*"y":\s*(\d+)/g)].map((x) => ({ x: x[1], y: Number(x[2]) }));
+  const P = pts(m[1]), D = pts(m[2]);
   if (!D.length) return null;
   const cut = (days: number) => new Date(today.getTime() - days * 864e5).toISOString().slice(0, 10);
-  const at = (days: number) => { const pts = D.filter((p) => p.x <= cut(days)); return pts.length ? pts[pts.length - 1].y : null; };
-  const de = html.match(/Direct elimination<\/span>\s*<\/td>\s*<td class="ranking-table__numeric">(\d+)<\/td>/);
-  const pool = html.match(/Pools?<\/span>\s*<\/td>\s*<td class="ranking-table__numeric">(\d+)<\/td>/);
+  const at = (arr: { x: string; y: number }[], days: number) => { const p = arr.filter((q) => q.x <= cut(days)); return p.length ? p[p.length - 1].y : null; };
+  // Foil only: the page's summary rows list every weapon the fencer has, and
+  // the first "Direct elimination" row can be epee. The F series is foil.
   return {
-    strength_de: de ? Number(de[1]) : D[D.length - 1].y,
-    strength_pool: pool ? Number(pool[1]) : null,
-    de_now: D[D.length - 1].y, de_90d: at(90), de_180d: at(180), de_365d: at(365),
+    strength_de: D[D.length - 1].y,
+    strength_pool: P.length ? P[P.length - 1].y : null,
+    de_now: D[D.length - 1].y, de_90d: at(D, 90), de_180d: at(D, 180), de_365d: at(D, 365),
+    pool_now: P.length ? P[P.length - 1].y : null, pool_90d: at(P, 90), pool_180d: at(P, 180),
     events_90d: D.filter((p) => p.x >= cut(90)).length, events_180d: D.filter((p) => p.x >= cut(180)).length,
     last_event: D[D.length - 1].x, peak_de: Math.max(...D.map((p) => p.y)),
+  };
+}
+
+// Placings from the profile page's rating-history table: the last 12 months.
+function parseResults(html: string, today: Date) {
+  const re = /<tr data-ranking-search="[^"]*">\s*<td class="ranking-table__numeric" data-ranking-value="(\d{8})">[^<]*<\/td>\s*<td>([^<]*)<\/td>\s*<td class="person-summary__event-cell">\s*<a href="\/event\/\d+\/results" title="([^"]*)">[^<]*<\/a>\s*<\/td>\s*<td class="ranking-table__numeric" data-ranking-value="\d+">\s*(\d+)\s*\/\s*(\d+)\s*<\/td>/g;
+  const rows: { d: string; event: string; place: number; field: number }[] = [];
+  for (const m of html.matchAll(re)) {
+    const d = `${m[1].slice(0, 4)}-${m[1].slice(4, 6)}-${m[1].slice(6)}`;
+    rows.push({ d, event: clean(m[3]).slice(0, 60), place: Number(m[4]), field: Number(m[5]) });
+  }
+  const cut = (days: number) => new Date(today.getTime() - days * 864e5).toISOString().slice(0, 10);
+  const win = (days: number) => {
+    const w = rows.filter((r) => r.d >= cut(days) && r.field > 0).map((r) => r.place / r.field).sort((a, b) => a - b);
+    if (!w.length) return { n: 0, median: null, best: null };
+    return { n: w.length, median: +w[Math.floor(w.length / 2)].toFixed(3), best: +w[0].toFixed(3) };
+  };
+  const w90 = win(90), w180 = win(180);
+  return {
+    results_90d: w90.n, median_pct_90d: w90.median, best_pct_90d: w90.best,
+    results_180d: w180.n, median_pct_180d: w180.median, best_pct_180d: w180.best,
+    history_json: rows.filter((r) => r.d >= cut(365)).slice(0, 40),
   };
 }
 
@@ -82,14 +104,11 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
-  // Only a signed-in member can ask for a refresh (or the service key, for the
-  // maintenance scripts that run outside the browser).
+  // A signed-in member, or the service key (the daily job and maintenance scripts).
   const auth = req.headers.get("Authorization") || "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   let userId: string | null = null;
-  if (auth === `Bearer ${serviceKey}`) {
-    userId = null;
-  } else {
+  if (auth !== `Bearer ${serviceKey}`) {
     const anon = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: auth } } });
     const { data: who } = await anon.auth.getUser();
     if (!who?.user) return json({ error: "sign in first" }, 401);
@@ -101,10 +120,9 @@ Deno.serve(async (req) => {
   const force = Boolean(body.force);
   if (!ftEventId) return json({ error: "ft_event_id required" }, 400);
 
-  const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+  const db = createClient(Deno.env.get("SUPABASE_URL")!, serviceKey);
   const now = new Date();
 
-  // Once a day per event is plenty; entry lists move slowly until the last week.
   const { data: prev } = await db.from("event_refresh").select("*").eq("ft_event_id", ftEventId).maybeSingle();
   const prevAt = prev?.last_refreshed_at ? new Date(prev.last_refreshed_at) : null;
   if (!force && prevAt && !prev.partial && now.getTime() - prevAt.getTime() < EVENT_REFRESH_HOURS * 3600e3) {
@@ -123,24 +141,33 @@ Deno.serve(async (req) => {
       if (ins.error) writeErrors.push("entrants write: " + ins.error.message);
     }
 
-    // Strength pages only for entrants whose snapshot is stale.
+    // Two pages per stale fencer: profile (placings) and strength (DE + pool over time).
     const ids = entrants.map((e) => e.tracker_id);
-    const { data: fresh } = await db.from("fencer_snapshot").select("tracker_id,fetched_at").in("tracker_id", ids);
-    const freshSet = new Set((fresh || []).filter((f) => now.getTime() - new Date(f.fetched_at).getTime() < FRESH_DAYS * 864e3).map((f) => Number(f.tracker_id)));
+    const { data: fresh } = await db.from("fencer_snapshot").select("tracker_id,fetched_at,results_180d").in("tracker_id", ids);
+    const freshSet = new Set((fresh || [])
+      .filter((f) => f.results_180d != null && now.getTime() - new Date(f.fetched_at).getTime() < FRESH_DAYS * 864e5)
+      .map((f) => Number(f.tracker_id)));
     const stale = entrants.filter((e) => !freshSet.has(e.tracker_id));
     let fetched = 0, partial = false;
     for (const e of stale) {
-      if (pages >= MAX_PAGES) { partial = true; break; }
-      await sleep(DELAY_MS);
+      if (pages + 2 > MAX_PAGES) { partial = true; break; }
+      const row: Record<string, unknown> = { tracker_id: e.tracker_id, name: e.name, club: e.club, rating: e.rating, strength_de: e.strength_de, fetched_at: now.toISOString() };
       try {
+        await sleep(DELAY_MS);
+        const ph = await page(`https://fencingtracker.com/p/${e.tracker_id}/x`); pages += 1;
+        Object.assign(row, parseResults(ph, now));
+        const by = ph.match(/person-hero__birth-year">(\d{4})</);
+        if (by) row.birth_year = Number(by[1]);
+      } catch (_) { /* profile page missing: keep the entry-list strength */ }
+      try {
+        await sleep(DELAY_MS);
         const sh = await page(`https://fencingtracker.com/p/${e.tracker_id}/x/strength`); pages += 1;
         const s = parseStrength(sh, now);
-        const up = await db.from("fencer_snapshot").upsert({ tracker_id: e.tracker_id, name: e.name, club: e.club, rating: e.rating, ...(s || { strength_de: e.strength_de }), fetched_at: now.toISOString() });
-        if (up.error) writeErrors.push(`snapshot ${e.tracker_id}: ${up.error.message}`); else fetched += 1;
-      } catch (err) {
-        const up = await db.from("fencer_snapshot").upsert({ tracker_id: e.tracker_id, name: e.name, club: e.club, rating: e.rating, strength_de: e.strength_de, fetched_at: now.toISOString() });
-        if (up.error) writeErrors.push(`snapshot ${e.tracker_id}: ${up.error.message}`);
-      }
+        if (s) Object.assign(row, s);
+      } catch (_) { /* strength page missing */ }
+      delete row.birth_year;   // not a snapshot column yet
+      const up = await db.from("fencer_snapshot").upsert(row);
+      if (up.error) writeErrors.push(`snapshot ${e.tracker_id}: ${up.error.message}`); else fetched += 1;
     }
     const summary = {
       ft_event_id: ftEventId, title, event_date: date, entrants: entrants.length,

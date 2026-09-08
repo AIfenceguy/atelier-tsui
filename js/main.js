@@ -17,6 +17,8 @@ import { mountLessons } from './modules/lessons.js';
 import { mountTrain } from './modules/train.js';
 import { mountInsight } from './modules/insight.js';
 import { mountSeason } from './modules/season.js';
+import { mountNavMore } from './lib/nav-more.js';
+mountNavMore();
 import { mountTournaments } from './modules/tournaments.js';
 import { mountTournamentDay } from './modules/tournament-day.js';
 import { mountImportV1 } from './modules/import_v1.js';

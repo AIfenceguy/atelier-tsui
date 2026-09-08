@@ -84,7 +84,7 @@ export async function mountSeason(root) {
     body.appendChild(el('div', { class: 'empty' }, [el('p', { class: 'empty-line' }, ['Reading the fields…'])]));
 
     const today = new Date().toISOString().slice(0, 10);
-    const [tsRes, evRes, watchRes, priceRes, boutRes, refreshRes, mineRes, homeRes] = await Promise.all([
+    const [tsRes, evRes, watchRes, priceRes, boutRes, refreshRes, mineRes, homeRes, runRes] = await Promise.all([
         supa.from('true_strength').select('*').eq('profile_id', profile.id),
         supa.from('season_events').select('*').gte('start_date', today).order('start_date'),
         supa.from('flight_watches').select('id,label,destination,depart_date,return_date,hotel_nightly_rate,booked_out_cash,booked_ret_cash,passengers').is('deleted_at', null),
@@ -92,9 +92,15 @@ export async function mountSeason(root) {
         supa.from('fencer_bouts').select('*').eq('profile_id', profile.id).order('bout_date', { ascending: false }).limit(40),
         supa.from('event_refresh').select('*'),
         supa.from('member_events').select('*').eq('profile_id', profile.id),
-        supa.from('household').select('*').maybeSingle()
+        supa.from('household').select('*').maybeSingle(),
+        supa.from('refresh_runs').select('finished_at,events_done,pages').not('finished_at', 'is', null).order('id', { ascending: false }).limit(1).maybeSingle()
     ]);
     body.innerHTML = '';
+    if (runRes?.data?.finished_at) {
+        body.appendChild(el('div', { class: 'label', style: { color: INK_MUTE, padding: '0 var(--gut) 12px' } }, [
+            `Fields last read ${new Date(runRes.data.finished_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · refreshed nightly`
+        ]));
+    }
 
     // Price from home when a home is set; venue cities come from the geocode cache.
     HOME = homeRes.data?.home_lat != null ? { lat: homeRes.data.home_lat, lng: homeRes.data.home_lng, city: homeRes.data.home_city, hotel_night: homeRes.data.hotel_night } : null;
@@ -161,7 +167,7 @@ async function applyLiveForecasts(events, refreshed, profile, myForm) {
     const ids = [...new Set(entrants.map((x) => Number(x.tracker_id)))];
     const snaps = new Map();
     for (let i = 0; i < ids.length; i += 250) {
-        const { data } = await supa.from('fencer_snapshot').select('tracker_id,strength_de,de_now,de_90d,de_180d,events_90d,events_180d,last_event,fetched_at').in('tracker_id', ids.slice(i, i + 250));
+        const { data } = await supa.from('fencer_snapshot').select('tracker_id,strength_de,strength_pool,de_now,de_90d,de_180d,pool_now,pool_90d,pool_180d,events_90d,events_180d,results_90d,median_pct_90d,best_pct_90d,results_180d,median_pct_180d,last_event,fetched_at').in('tracker_id', ids.slice(i, i + 250));
         for (const s of data || []) snaps.set(Number(s.tracker_id), s);
     }
     const byEvent = new Map();
@@ -169,7 +175,7 @@ async function applyLiveForecasts(events, refreshed, profile, myForm) {
     for (const e of events) {
         const list = byEvent.get(Number(e.ft_event_id));
         if (!list || !e.category) continue;
-        const f = forecast({ entrants: list, snapshots: snaps, myStrength: myForm, myOfficial: profile.strength_de ?? myForm, myTrackerId: profile.tracker_id, category: e.category, tier: e.tier });
+        const f = forecast({ entrants: list, snapshots: snaps, myStrength: myForm, myOfficial: profile.strength_de ?? myForm, myPool: profile.strength_pool ?? null, myTrackerId: profile.tracker_id, category: e.category, tier: e.tier });
         if (!f) continue;
         const prev = e.projections[profile.name] || {};
         e.projections[profile.name] = { ...prev, ...f, pending: false };
@@ -183,30 +189,56 @@ async function applyLiveForecasts(events, refreshed, profile, myForm) {
 // ---------------------------------------------------------------------------
 function strengthCard(profile, ts, myForm) {
     const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
-    wrap.appendChild(label('Strength · official vs form'));
-    wrap.appendChild(serif(`${profile.strength_de ?? '—'} official · seeded here at ${myForm}`, '26px'));
-    const rowFor = (t, name) => {
-        if (!t || !t.bouts) return el('p', { style: { color: INK_MUTE, fontSize: '13px', margin: '6px 0 0' } }, [`No bouts in the last ${name}.`]);
-        const gap = t.perf_minus_official;
-        const gapColor = gap >= 60 ? GOOD : gap <= -60 ? BAD : INK;
-        return el('div', { style: { margin: '12px 0 0' } }, [
-            label(`Last ${name} · ${t.bouts} bouts`),
-            el('div', { style: { display: 'flex', gap: '18px', flexWrap: 'wrap', marginTop: '4px' } }, [
-                stat('Performance', t.performance_rating, gapColor),
-                stat('vs official', (gap > 0 ? '+' : '') + gap, gapColor),
-                stat('Record', `${t.wins}–${t.bouts - t.wins}`),
-                stat('vs stronger', `${t.wins_vs_stronger}–${t.vs_stronger - t.wins_vs_stronger}`, t.wins_vs_stronger > 0 ? GOOD : INK),
-                stat('Lost to weaker', `${t.losses_vs_weaker} of ${t.vs_weaker}`, t.losses_vs_weaker > t.vs_weaker * 0.25 ? BAD : INK),
-                stat('Best win', t.best_win_strength ?? '—', GOOD),
-                stat('Worst loss', t.worst_loss_strength ?? '—', BAD)
-            ])
-        ]);
-    };
-    wrap.appendChild(rowFor(ts[90], '90 days'));
-    wrap.appendChild(rowFor(ts[180], '180 days'));
-    wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '12px 0 0', lineHeight: '1.5' } }, [
-        'Performance is the strength that best explains these wins and losses against opponents of known strength, on the same scale FencingTracker uses. ',
-        'A positive gap means he is fencing above his seeding. The plan below seeds him on form and shows the official seed in brackets.'
+    const de = profile.strength_de, pool = profile.strength_pool;
+    const gap90 = ts[90]?.perf_minus_official;
+    wrap.appendChild(label('How he is fencing · last 3 and 6 months'));
+    wrap.appendChild(serif(
+        gap90 == null ? `${de ?? '—'} official` :
+        gap90 >= 60 ? `Fencing ${gap90} above his seed` :
+        gap90 <= -60 ? `Fencing ${-gap90} below his seed` : 'Fencing at his seed',
+        '28px', gap90 >= 60 ? GOOD : gap90 <= -60 ? BAD : INK));
+    wrap.appendChild(el('div', { class: 'label', style: { color: INK_MUTE, margin: '2px 0 10px' } }, [
+        `Official DE strength ${de ?? '—'} · pool strength ${pool ?? '—'} · seeded on this screen at ${myForm}`
+    ]));
+
+    // The two windows side by side: the same columns, so the eye compares.
+    const rowsSpec = [
+        ['Performance', (t) => t.performance_rating, (t) => t.perf_minus_official >= 60 ? GOOD : t.perf_minus_official <= -60 ? BAD : INK],
+        ['vs official', (t) => (t.perf_minus_official > 0 ? '+' : '') + t.perf_minus_official, (t) => t.perf_minus_official >= 60 ? GOOD : t.perf_minus_official <= -60 ? BAD : INK],
+        ['Record', (t) => `${t.wins}–${t.bouts - t.wins}`, () => INK],
+        ['Beat stronger', (t) => `${t.wins_vs_stronger} of ${t.vs_stronger}`, (t) => t.wins_vs_stronger > 0 ? GOOD : INK],
+        ['Lost to weaker', (t) => `${t.losses_vs_weaker} of ${t.vs_weaker}`, (t) => t.losses_vs_weaker > t.vs_weaker * 0.25 ? BAD : INK],
+        ['Best win', (t) => t.best_win_strength ?? '—', () => GOOD],
+        ['Worst loss', (t) => t.worst_loss_strength ?? '—', () => BAD]
+    ];
+    const grid = el('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(92px, 1.2fr) 1fr 1fr', columnGap: '12px', rowGap: '6px', alignItems: 'baseline' } });
+    grid.appendChild(el('span', {}, ['']));
+    grid.appendChild(label('Last 3 months', INK, { fontWeight: '700' }));
+    grid.appendChild(label('Last 6 months', INK, { fontWeight: '700' }));
+    const t90 = ts[90], t180 = ts[180];
+    const cell = (t, get, col) => t && t.bouts ? num(String(get(t)), col(t), '18px') : el('span', { class: 'label', style: { color: INK_MUTE } }, ['—']);
+    for (const [lbl, get, col] of rowsSpec) {
+        grid.appendChild(label(lbl));
+        grid.appendChild(cell(t90, get, col));
+        grid.appendChild(cell(t180, get, col));
+    }
+    grid.appendChild(label('Bouts'));
+    grid.appendChild(cell(t90, (t) => t.bouts, () => INK));
+    grid.appendChild(cell(t180, (t) => t.bouts, () => INK));
+    wrap.appendChild(grid);
+
+    // Pools decide the seed; the seed decides the bracket.
+    if (de && pool) {
+        const g = de - pool;
+        wrap.appendChild(el('p', { style: { color: g >= 200 ? WARN : INK, fontSize: '13px', margin: '12px 0 0', lineHeight: '1.5', fontWeight: g >= 200 ? '700' : '500' } }, [
+            g >= 200
+                ? `Pools trail his DE by ${g} points. He is drawn into brackets as a weaker fencer than he is, and meets the top seeds a round early.`
+                : g <= -100 ? `Pools run ${-g} ahead of his DE: he seeds well, then gives it back in the bracket. The work is in the 15-touch bout.`
+                : 'Pools and DE are in step; his seed matches how he fences.'
+        ]));
+    }
+    wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '10px 0 0', lineHeight: '1.5' } }, [
+        'Performance is the strength that best explains his wins and losses against opponents of known strength, on the same scale FencingTracker uses. Every registered opponent below gets the same two windows from their own results.'
     ]));
     return wrap;
 }
@@ -370,6 +402,7 @@ function eventRow({ e, p, cost, ppd }, i, profile, refreshed) {
         row.appendChild(el('div', { style: { display: 'flex', gap: '16px', flexWrap: 'wrap', marginTop: '2px' } }, [
             stat('Field', `${e.entrants ?? p.field_n ?? '—'}`),
             stat('Seed', `${p.seed_form}` + (p.seed_official && p.seed_official !== p.seed_form ? ` (${p.seed_official})` : ''), p.seed_form <= 8 ? GOOD : INK),
+            ...(p.seed_pool ? [stat('By pools', `${p.seed_pool}`, p.seed_pool > p.seed_form + 4 ? WARN : INK)] : []),
             stat('Expected', ordinal(Math.round(p.median || p.exp)), finishColor),
             stat('Top 8', pct(p.p8), p.p8 >= 0.6 ? GOOD : INK),
             stat('Top 16', pct(p.p16)),
@@ -388,13 +421,18 @@ function eventRow({ e, p, cost, ppd }, i, profile, refreshed) {
     } else if (e.plan_note) note.push(e.plan_note);
     if (note.length) row.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '2px 0 0', lineHeight: '1.5' } }, [note.join(' ')]));
 
-    // The fencers just above his seed: the ones worth a by-hand look at recent bouts.
+    // The fencers just above his seed, each with their own last 3 and 6 months.
     if (p.live && p.neighbours?.length) {
-        row.appendChild(el('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '4px' } }, p.neighbours.map((n) => {
-            const col = n.tag === 'rising' ? WARN : n.tag === 'fading' || n.tag === 'inactive' ? GOOD : INK_MUTE;
-            return el('a', { href: `https://fencingtracker.com/p/${n.tracker_id}/x`, target: '_blank', rel: 'noopener', class: 'label',
-                style: { border: '1px solid ' + col, color: col, borderRadius: 'var(--r-pill)', padding: '3px 8px', textDecoration: 'none' } },
-                [`${n.name} ${n.strength}${n.tag !== 'steady' ? ' · ' + n.tag : ''}`]);
+        row.appendChild(label('Around his seed · their recent form', INK_MUTE, { marginTop: '6px' }));
+        row.appendChild(el('div', { style: { display: 'grid', gridTemplateColumns: '1fr', gap: '4px', marginTop: '2px' } }, p.neighbours.map((n) => {
+            const col = n.tag === 'rising' ? WARN : n.tag === 'fading' || n.tag === 'inactive' ? GOOD : INK;
+            return el('div', { style: { display: 'flex', gap: '8px', alignItems: 'baseline', flexWrap: 'wrap' } }, [
+                el('a', { href: `https://fencingtracker.com/p/${n.tracker_id}/x`, target: '_blank', rel: 'noopener',
+                    style: { color: INK, fontSize: '14px', fontWeight: n.tag === 'rising' ? '700' : '500', textDecoration: 'none' } }, [n.name]),
+                el('span', { class: 'num', style: { color: INK, fontSize: '13px' } }, [String(n.strength)]),
+                n.tag !== 'steady' ? el('span', { class: 'label', style: { color: col, fontWeight: '700' } }, [n.tag]) : null,
+                el('span', { class: 'label', style: { color: INK_MUTE } }, [n.form || ''])
+            ].filter(Boolean));
         })));
     }
 

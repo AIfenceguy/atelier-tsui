@@ -2,13 +2,15 @@
 // Caches the static shell so the app loads when wifi is bad at venues.
 // Mutations go through the in-app offline queue (lib/offline.js), not the SW.
 
-const SHELL_CACHE = 'en-garde-shell-v96';
+const SHELL_CACHE = 'en-garde-shell-v97';
 const SHELL_FILES = [
     './',
     './index.html',
     './manifest.json',
     './css/style.css',
     './css/mobile-fix.css',
+    './css/nav.css',
+    './js/lib/nav-more.js',
     './js/main.js',
     './js/lib/config.js',
     './js/lib/supa.js',

@@ -59,11 +59,37 @@ export function tiltedStrength(snap, listedStrength) {
     const base = snap?.strength_de ?? listedStrength ?? null;
     if (base == null) return { strength: null, tag: 'unknown' };
     if (!snap || snap.de_90d == null) return { strength: base, tag: 'steady' };
-    if ((snap.events_180d ?? 0) === 0) return { strength: base - 50, tag: 'inactive' };
-    if ((snap.events_90d ?? 0) < 2) return { strength: base, tag: 'steady' };
-    const move = snap.de_now - snap.de_90d;
-    const adj = Math.max(-200, Math.min(200, 2 * move));
-    return { strength: base + adj, tag: move >= 40 ? 'rising' : move <= -40 ? 'fading' : 'steady' };
+    if ((snap.events_180d ?? 0) === 0 && !(snap.results_180d > 0)) return { strength: base - 50, tag: 'inactive' };
+    // 1. The DE strength trend over 90 days, read as the visible edge of a larger move.
+    const move = (snap.events_90d ?? 0) >= 2 ? snap.de_now - snap.de_90d : 0;
+    let adj = Math.max(-200, Math.min(200, 2 * move));
+    // 2. What they actually placed, last 3 months: a median in the top quarter of
+    //    their fields is a fencer seeding below their level; bottom 40% the reverse.
+    const med = snap.median_pct_90d ?? snap.median_pct_180d;
+    const n = snap.results_90d ?? snap.results_180d ?? 0;
+    if (med != null && n >= 2) {
+        if (med <= 0.25) adj += 40;
+        else if (med >= 0.6) adj -= 40;
+    }
+    // 3. Pools: a fencer whose pool strength trails their DE by 250+ gets a worse
+    //    seed than their DE number says, and meets the top seeds earlier.
+    if (snap.pool_now != null && snap.de_now != null && snap.de_now - snap.pool_now >= 250) adj -= 30;
+    adj = Math.max(-250, Math.min(250, adj));
+    const tag = move >= 40 || (med != null && med <= 0.2 && n >= 3) ? 'rising'
+        : move <= -40 || (med != null && med >= 0.65 && n >= 3) ? 'fading' : 'steady';
+    return { strength: base + adj, tag };
+}
+
+// A short, parent-readable line about a registered fencer's recent form.
+export function formLine(snap) {
+    if (!snap) return 'no recent record';
+    const bits = [];
+    if (snap.results_90d) bits.push(`${snap.results_90d} event${snap.results_90d > 1 ? 's' : ''} in 3 mo, median top ${Math.round((snap.median_pct_90d || 0) * 100)}%`);
+    else if (snap.results_180d) bits.push(`${snap.results_180d} event${snap.results_180d > 1 ? 's' : ''} in 6 mo, median top ${Math.round((snap.median_pct_180d || 0) * 100)}%`);
+    else bits.push('no events in 6 months');
+    if (snap.de_90d != null && snap.de_now != null && Math.abs(snap.de_now - snap.de_90d) >= 20) bits.push(`DE ${snap.de_now - snap.de_90d > 0 ? '+' : ''}${snap.de_now - snap.de_90d} in 3 mo`);
+    if (snap.pool_now != null && snap.de_now != null && snap.de_now - snap.pool_now >= 250) bits.push('weak pools');
+    return bits.join(' · ');
 }
 
 // ---- bracket simulation ---------------------------------------------------
@@ -102,13 +128,18 @@ export function simulate(fieldStrengths, me, sims = 1500, seed = 7) {
 
 // ---- forecast for one fencer in one event ---------------------------------
 // entrants: [{ tracker_id, name, strength_de }], snapshots: Map(tracker_id -> fencer_snapshot)
-export function forecast({ entrants, snapshots, myStrength, myOfficial, myTrackerId, category, tier }) {
+export function forecast({ entrants, snapshots, myStrength, myOfficial, myPool, myTrackerId, category, tier }) {
     const tagged = [];
     for (const e of entrants) {
         if (myTrackerId && Number(e.tracker_id) === Number(myTrackerId)) continue;
-        const { strength, tag } = tiltedStrength(snapshots?.get(Number(e.tracker_id)), e.strength_de);
-        if (strength != null && strength > 800 && strength < 3200) tagged.push({ ...e, strength, tag });
+        const snap = snapshots?.get(Number(e.tracker_id));
+        const { strength, tag } = tiltedStrength(snap, e.strength_de);
+        if (strength != null && strength > 800 && strength < 3200) tagged.push({ ...e, strength, tag, snap });
     }
+    // Where he would sit if the pools went by pool strength: the seed the
+    // bracket is actually drawn from, which is why the pool gap matters.
+    const poolOf = (x) => x.snap?.pool_now ?? x.snap?.strength_pool ?? null;
+    const seed_pool = myPool != null ? 1 + tagged.filter((x) => (poolOf(x) ?? x.strength) > myPool).length : null;
     const field = tagged.map((x) => x.strength);
     if (field.length < 3) return null;
     const dist = simulate(field, myStrength);
@@ -126,6 +157,7 @@ export function forecast({ entrants, snapshots, myStrength, myOfficial, myTracke
         field_n: n, registered: entrants.length,
         seed_form: 1 + field.filter((s) => s > myStrength).length,
         seed_official: 1 + field.filter((s) => s > myOfficial).length,
+        seed_pool,
         p8: +cum(8).toFixed(2), p16: +cum(16).toFixed(2), p32: +cum(32).toFixed(2), p64: +cum(64).toFixed(2),
         exp: +exp.toFixed(1), median, points_exp: +pts.toFixed(1),
         points_if_top8: pointsFor(category, tier, 8, n), points_if_top16: pointsFor(category, tier, 16, n),
@@ -133,7 +165,7 @@ export function forecast({ entrants, snapshots, myStrength, myOfficial, myTracke
         // the ten nearest seeds above him, for a by-hand read of their recent bouts
         neighbours: tagged.sort((a, b) => b.strength - a.strength)
             .filter((x) => x.strength >= myStrength - 80).slice(-10).reverse()
-            .map((x) => ({ name: x.name, tracker_id: x.tracker_id, strength: Math.round(x.strength), tag: x.tag }))
+            .map((x) => ({ name: x.name, tracker_id: x.tracker_id, strength: Math.round(x.strength), tag: x.tag, form: formLine(x.snap), pool: poolOf(x) }))
     };
 }
 

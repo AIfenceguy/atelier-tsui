@@ -1,0 +1,44 @@
+/* Bottom navigation: five tabs a thumb can hit, and a More tab that opens the
+   rest as a second row. Which five depends on who is signed in: a parent gets
+   Season and Travel up front, a fencer gets Train and Bouts. Nothing is
+   removed - every route stays reachable. */
+
+.bottom-nav {
+    grid-auto-columns: minmax(0, 1fr);
+    overflow: visible;
+}
+.bottom-nav a[data-route],
+.bottom-nav .nav-more { min-width: 0; }
+
+/* Secondary tabs hide until More is open. */
+.bottom-nav:not(.is-expanded) a[data-route='opponents'],
+.bottom-nav:not(.is-expanded) a[data-route='physical'],
+.bottom-nav:not(.is-expanded) a[data-route='mental'],
+.bottom-nav:not(.is-expanded) a[data-route='lessons'],
+.bottom-nav:not(.is-expanded) a[data-route='videos'],
+.bottom-nav:not(.is-expanded) a[data-route='style'],
+.bottom-nav:not(.is-expanded) a[data-route='insight'] { display: none; }
+/* Parent: Travel up front, Train folded away. Fencer: the reverse. */
+body[data-active-role='parent'] .bottom-nav:not(.is-expanded) a[data-route='train'] { display: none; }
+body:not([data-active-role='parent']) .bottom-nav:not(.is-expanded) a[data-route='travel'] { display: none; }
+
+/* Expanded: two rows, six across, all tabs. */
+.bottom-nav.is-expanded {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.bottom-nav.is-expanded a[data-route] { display: flex; }
+
+/* The More tab looks like its siblings. */
+.bottom-nav .nav-more {
+    background: none; border: none; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 9px 0 14px; color: #6B7280; font: inherit;
+    -webkit-tap-highlight-color: transparent;
+}
+.bottom-nav .nav-more svg { display: block; width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.6; }
+.bottom-nav .nav-more .nav-label {
+    font-family: var(--eg-mono, var(--mono, ui-monospace, monospace));
+    font-size: 8.5px; letter-spacing: 0.2em; text-transform: uppercase; font-weight: 700;
+}
+.bottom-nav.is-expanded .nav-more { color: var(--ink, #1A1D24); }
