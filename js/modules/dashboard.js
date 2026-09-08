@@ -16,6 +16,7 @@ import { todayCoachCard, listCoachNotes } from '../lib/coach.js';
 import { supa } from '../lib/supa.js';
 import { buildWeeklyCoachSummary, renderCoachCard } from '../lib/drill-coach.js';
 import { pickDailyTip, renderDailyTip } from '../lib/daily-tip.js';
+import { loadWeeklyPlan, weekSummary } from '../lib/weekly-plan.js';
 
 export async function mountDashboard(root) {
     const profile = activeProfile();
@@ -65,6 +66,20 @@ export async function mountDashboard(root) {
     try {
         root.appendChild(renderDailyTip(await pickDailyTip(profile)));
     } catch (e) { console.warn('Daily tip skipped:', e); }
+
+    // The week's score: sessions done against the three asks (Bouts, Body, Mind).
+    try {
+        const plans = await loadWeeklyPlan(profile);
+        const { done, target } = weekSummary(plans);
+        const MUTE = '#6B7280';
+        root.appendChild(el('div', { style: { display: 'flex', gap: '14px', alignItems: 'baseline', flexWrap: 'wrap', padding: '0 var(--gut) 14px' } }, [
+            el('span', { class: 'label', style: { color: MUTE } }, ['This week']),
+            el('span', { class: 'num', style: { color: done >= target ? '#1f7a1f' : 'var(--ink)', fontWeight: '700', fontSize: '16px' } }, [`${done} of ${target} sessions`]),
+            ...plans.map((p) => el('a', { href: p.href || '#train', class: 'label', style: { color: (p.checkins || []).length >= p.target_n ? '#1f7a1f' : MUTE, textDecoration: 'none' } }, [
+                `${p.area === 'bout' ? 'Bouts' : p.area === 'body' ? 'Body' : 'Mind'} ${Math.min(p.target_n, (p.checkins || []).length)}/${p.target_n}`
+            ]))
+        ]));
+    } catch (e) { console.warn('Week summary skipped:', e); }
 
     // Status metrics (Body / Mind) — two-column metric grid
     const bodyMetric = phys

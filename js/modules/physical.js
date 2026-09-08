@@ -9,6 +9,7 @@ import {
     listDrillLibrary, addDrillToLibrary, listBouts, listOpponents
 } from '../lib/db.js';
 import { safeWrite } from '../lib/offline.js';
+import { loadWeeklyPlan, renderPlanCard } from '../lib/weekly-plan.js';
 import { scaleSlider } from '../lib/chips.js';
 import { getWeaknessDrills } from '../lib/weakness-drills.js';
 
@@ -99,12 +100,19 @@ export async function mountPhysical(root) {
     });
 
     root.appendChild(el('div', { style: { padding: '40px var(--gut) 8px' } }, [
-        el('h1', { class: 'page-eyebrow' }, ['Physical']),
+        el('h1', { class: 'page-eyebrow' }, ['Body']),
         el('div', { class: 'today-sub' }, [
             el('span', {}, [profile.name.toUpperCase()]),
             el('span', {}, [fmtDate(date).toUpperCase()])
         ])
     ]));
+
+    // This week's one thing for the body, from his own data, with the tick.
+    try {
+        const plans = await loadWeeklyPlan(profile);
+        const p = plans.find((x) => x.area === 'body');
+        if (p) root.appendChild(renderPlanCard(p));
+    } catch (e) { console.warn('weekly plan skipped', e); }
 
     if (inTaper) {
         root.appendChild(el('div', { class: 'card', style: { margin: '0 var(--gut) 16px' } }, [

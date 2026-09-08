@@ -10,6 +10,7 @@ import { activeProfile } from '../lib/state.js';
 import { listBouts, getBout, listOpponents, findOrCreateOpponent, loadTaxonomies } from '../lib/db.js';
 import { chipGroup, tacticTally, concededTally } from '../lib/chips.js';
 import { safeWrite } from '../lib/offline.js';
+import { loadWeeklyPlan, renderPlanCard } from '../lib/weekly-plan.js';
 import { boutDebrief, listCoachNotes } from '../lib/coach.js';
 import { getWeaknessDrills } from '../lib/weakness-drills.js';
 import { logDrillSession, tagToSlug } from '../lib/drill-mastery.js';
@@ -40,6 +41,13 @@ export async function mountBoutsList(root) {
             el('span', {}, [profile.name.toUpperCase()])
         ])
     ]));
+
+    // This week's one thing for bouts, from his own record, with the tick.
+    try {
+        const plans = await loadWeeklyPlan(profile);
+        const p = plans.find((x) => x.area === 'bout');
+        if (p) root.appendChild(renderPlanCard(p));
+    } catch (e) { console.warn('weekly plan skipped', e); }
 
     // Above the list and above the empty state: the empty state is precisely
     // when a two-tap log matters most.

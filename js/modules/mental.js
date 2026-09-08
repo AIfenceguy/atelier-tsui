@@ -7,6 +7,7 @@ import { el, todayISO, fmtDate, daysUntil, toast } from '../lib/util.js';
 import { activeProfile } from '../lib/state.js';
 import { getMentalForDate, nextTournament, listBouts } from '../lib/db.js';
 import { safeWrite } from '../lib/offline.js';
+import { loadWeeklyPlan, renderPlanCard } from '../lib/weekly-plan.js';
 import { scaleSlider, chipGroup, chipArrayEditor } from '../lib/chips.js';
 
 const SCENARIOS = [
@@ -46,10 +47,20 @@ export async function mountMental(root) {
     const daysToT = nextT ? daysUntil(nextT.start_date) : null;
     const tournamentMode = daysToT != null && daysToT >= 0 && daysToT <= 7;
 
-    root.appendChild(el('div', { class: 'section-head' }, [
-        el('h2', {}, ['Mental']),
-        el('span', { class: 'meta' }, [profile.name, ' · ', fmtDate(date)])
+    root.appendChild(el('div', { style: { padding: '40px var(--gut) 8px' } }, [
+        el('h1', { class: 'page-eyebrow' }, ['Mind']),
+        el('div', { class: 'today-sub' }, [
+            el('span', {}, [profile.name.toUpperCase()]),
+            el('span', {}, [fmtDate(date).toUpperCase()])
+        ])
     ]));
+
+    // This week's one thing for the head, from his own record, with the tick.
+    try {
+        const plans = await loadWeeklyPlan(profile);
+        const p = plans.find((x) => x.area === 'mind');
+        if (p) root.appendChild(renderPlanCard(p));
+    } catch (e) { console.warn('weekly plan skipped', e); }
 
     if (tournamentMode) {
         const checklist = el('div', { class: 'card', style: { borderLeft: '3px solid var(--accent)' } });
