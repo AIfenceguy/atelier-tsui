@@ -160,8 +160,18 @@ export async function mountSeason(root) {
     events = events.filter((e) => e.projections[profile.name]).sort((a, b) => String(a.start_date).localeCompare(String(b.start_date)));
 
     // Cost per trip (this fencer's own days at that tournament), then intentions.
-    const ctx = { profile, sibling, ts90: ts[90], primary: primaryCategory(profile.birth_year), watches, latestPrice, events };
-    for (const e of events) { e.cost = tripCost(e, ctx); e.group = classify(e, ctx); }
+    const ctx = { profile, sibling, ts90: ts[90], primary: primaryCategory(profile.birth_year), watches, latestPrice, events, sycKeep: new Set() };
+    for (const e of events) e.cost = tripCost(e, ctx);
+    // One SYC counts per youth category: keep the best and one backup as
+    // value; the rest are insurance at best.
+    for (const cat of ['y12', 'y14']) {
+        const ranked = events.filter((e) => e.category === cat && e.tier === 'syc' && (e.projections[profile.name]?.points_exp || 0) >= 20)
+            .map((e) => ({ e, pts: e.projections[profile.name].points_exp, ppd: e.cost?.total > 0 ? e.projections[profile.name].points_exp / e.cost.total * 100 : 0 }))
+            .filter((x) => x.ppd >= 3 || siblingGoing(x.e, ctx))
+            .sort((a, b) => b.ppd - a.ppd);
+        ranked.slice(0, 2).forEach((x) => ctx.sycKeep.add(x.e.id));
+    }
+    for (const e of events) e.group = classify(e, ctx);
 
     body.appendChild(strengthCard(profile, ts, myForm));
     const chasing = CAT_ORDER.filter((c) => c !== 'junior' && events.some((e) => e.category === c));
@@ -197,7 +207,9 @@ function classify(e, ctx) {
     }
     if (playingUp && formDown) return sibGoing && pts >= 8 ? 'addon' : 'skip';
     // Real points: value when the trip is priced right, an add-on when the
-    // brother is going anyway, otherwise not worth the fare.
+    // brother is going anyway, otherwise not worth the fare. A third SYC in a
+    // youth category is insurance, not value: only one counts.
+    if (e.tier === 'syc' && (e.category === 'y12' || e.category === 'y14') && pts >= 20 && !ctx.sycKeep.has(e.id)) return sibGoing ? 'addon' : 'skip';
     if (pts >= 20 && (ppd == null || ppd >= 3)) return 'value';
     if (pts >= 20) return sibGoing ? 'addon' : 'skip';
     if (sibGoing && pts >= 8) return 'addon';
@@ -338,10 +350,11 @@ function eventRow(e, i, ctx, refreshed, group) {
     }
     const note = [];
     if (group === 'addon' && ctx.sibling) note.push(`${ctx.sibling.name} is going. ${e.travel === 'fly' ? `Add his fare, about ${money(cost.flight_pp * 2)} return,` : 'No extra travel,'} plus the entry.`);
-    if (e.tier === 'syc' && (e.category === 'y12' || e.category === 'y14') && group !== 'skip') {
-        const best = ctx.events.filter((x) => x.category === e.category && x.tier === 'syc' && x.group !== 'skip').sort((a, b) => (b.projections[name]?.points_exp || 0) - (a.projections[name]?.points_exp || 0))[0];
-        if (best && best !== e) note.push(`Only one SYC counts; ${best.tournament} is the better bet. This one is insurance if that weekend goes badly.`);
-        else if (best === e) note.push('The SYC that counts, on today\'s fields.');
+    if (e.tier === 'syc' && (e.category === 'y12' || e.category === 'y14') && pts >= 20) {
+        const keep = ctx.events.filter((x) => ctx.sycKeep.has(x.id) && x.category === e.category);
+        if (keep[0] === e) note.push('The SYC that counts, on today\'s fields and prices.');
+        else if (keep.length && keep[1] === e) note.push(`Only one SYC counts; ${keep[0].tournament} is the first choice. This one is the backup if that weekend goes badly.`);
+        else if (keep.length) note.push(`Only one SYC counts and ${keep[0].tournament} is the better bet. Real points here, but they would replace, not add.`);
     }
     if (cost.live) note.push(`Fare is live from the Travel screen: ${money(cost.flight_pp)} per person each way.`);
     else if (e.travel === 'fly' && group !== 'addon') note.push(`Fare estimated at ${money(cost.flight_pp)} per person one way.`);
