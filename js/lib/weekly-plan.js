@@ -102,7 +102,7 @@ function boutRule(ev, drills) {
     if (weak) {
         const label = weak.skill_slug.replace(/[-_]/g, ' ');
         const d = drills.filter((x) => x.skill_slug === weak.skill_slug).slice(0, 2);
-        return { title: `Rebuild the ${label}`, why: `Lowest rated skill at ${Number(weak.latest).toFixed(1)} of 5${weak.status ? `, ${weak.status}` : ''}. Skills fall fastest when they are not touched.`, session: d.length ? d.map((x) => `${x.title}: ${x.suggested_reps || x.execution || ''}`.trim()) : [`Ten minutes of ${label} at the start of every practice`], target: 3, href: '#train', evidence: { skill: weak.skill_slug, latest: weak.latest } };
+        return { title: `Rebuild the ${label}`, why: `His lowest rated skill, at ${Number(weak.latest).toFixed(0)}${weak.status ? ` and ${weak.status}` : ''}${weak.days_since ? `, last rated ${weak.days_since} days ago` : ''}. Skills fall fastest when they are not touched.`, session: d.length ? d.map((x) => `${x.title}: ${x.suggested_reps || x.execution || ''}`.trim()) : [`Ten minutes of ${label} at the start of every practice`], target: 3, href: '#train', evidence: { skill: weak.skill_slug, latest: weak.latest } };
     }
     return { title: 'Log two bouts this week', why: ev.boutsLogged ? 'The plan sharpens with every bout that is scored. Two more this week.' : 'No bouts logged yet. The first two tell the app how opponents score on him.', session: ['Score every practice bout with the quick log', 'On one of them, mark how the opponent scored'], target: 2, href: '#bouts', evidence: { bouts_logged: ev.boutsLogged } };
 }
