@@ -2595,3 +2595,126 @@ body {
 
 /* One fencer on the page: one card, not half a grid. */
 .level-grid:has(> .level-card:only-child) { grid-template-columns: minmax(0, 720px); }
+
+/* =====================================================
+   SCOUT INTEL PANEL — house style. The purple-edged, gradient, caps-and-
+   emoji version is retired: the headline reads in the serif, the plays are
+   plain rows under thin rules, labels are quiet mono, stats are columns
+   rather than grey tiles. Later rules win; earlier ones set no !important.
+   ===================================================== */
+.ft-intel-panel {
+    background: var(--surface, #fff);
+    border: 1px solid var(--rule, rgba(0,0,0,0.07));
+    border-left-width: 1px;
+    border-radius: 12px;
+    padding: 20px 20px 14px;
+    margin: 18px var(--gut) 0;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+.ft-intel-head { gap: 12px; margin-bottom: 6px; }
+.ft-intel-label {
+    font-family: var(--mono);
+    font-size: 9.5px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase;
+    color: #6B7280;
+}
+.ft-intel-link {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: #6B7280; text-decoration: none; border-bottom: 1px solid var(--rule, rgba(0,0,0,0.1));
+}
+.ft-rank-pill {
+    background: none; padding: 0; border-radius: 0;
+    font-family: var(--mono); font-size: 9.5px; font-weight: 600; letter-spacing: 0.14em;
+    color: var(--ink);
+}
+.ft-rank-pill + .ft-rank-pill { margin-left: 10px; }
+.ft-intel-headline, .ft-intel-tagline {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-style: italic; font-weight: 700;
+    font-size: 26px; line-height: 1.1; letter-spacing: 0; text-transform: none;
+    color: var(--ink);
+    margin: 4px 0 4px;
+}
+.ft-intel-headline-plan {
+    font-family: var(--eg-ui, system-ui, sans-serif);
+    font-style: normal; font-size: 14px; line-height: 1.55;
+    color: var(--ink);
+    margin: 0 0 10px;
+}
+.ft-plays-stack { display: flex; flex-direction: column; gap: 0; margin: 6px 0 4px; }
+.ft-play-card, .ft-play-p1, .ft-play-p2, .ft-play-p3 {
+    background: none;
+    border: 0;
+    border-top: 1px solid var(--rule, rgba(0,0,0,0.07));
+    border-radius: 0;
+    box-shadow: none;
+    padding: 12px 0 10px;
+    margin: 0;
+}
+.ft-play-tag {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-style: italic; font-weight: 700; font-size: 21px; line-height: 1.15;
+    letter-spacing: 0; text-transform: none;
+    color: var(--ink);
+    margin: 0 0 2px;
+}
+.ft-play-data {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.02em; line-height: 1.5;
+    color: #6B7280;
+    margin: 0 0 6px;
+}
+.ft-play-row { display: block; padding: 6px 0 0; border: 0; }
+.ft-play-row:first-of-type { border: 0; }
+.ft-play-label {
+    display: block;
+    font-family: var(--mono); font-size: 9.5px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase;
+    color: #6B7280;
+    margin-bottom: 2px;
+}
+.ft-play-cue .ft-play-label { color: #B45309; }
+.ft-play-text {
+    font-family: var(--eg-ui, system-ui, sans-serif);
+    font-size: 14px; line-height: 1.55;
+    color: var(--ink);
+    margin: 0;
+}
+.ft-intel-grid {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px 18px;
+    margin: 12px 0 4px; padding-top: 12px;
+    border-top: 1px solid var(--rule, rgba(0,0,0,0.07));
+}
+.ft-stat {
+    background: none; border: 0; border-radius: 0; box-shadow: none;
+    padding: 0; text-align: left;
+}
+.ft-stat-label {
+    font-family: var(--mono); font-size: 9.5px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase;
+    color: #6B7280;
+}
+.ft-stat-value {
+    font-family: var(--mono); font-size: 22px; font-weight: 600; line-height: 1.2;
+    color: var(--ink);
+    margin: 2px 0 0;
+}
+.ft-stat-sub { font-family: var(--mono); font-size: 10.5px; color: #6B7280; }
+.ft-tier-block, .ft-last5-block {
+    background: none; border: 0; border-top: 1px solid var(--rule, rgba(0,0,0,0.07));
+    border-radius: 0; padding: 10px 0 0; margin: 10px 0 0;
+}
+.ft-tier-block summary, .ft-last5-block summary {
+    font-family: var(--mono); font-size: 9.5px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase;
+    color: #6B7280; cursor: pointer;
+}
+.ft-tier-row { display: flex; gap: 12px; align-items: baseline; padding: 5px 0; border-top: 1px solid var(--rule, rgba(0,0,0,0.05)); }
+.ft-tier-badge {
+    background: none; border: 1px solid var(--rule, rgba(0,0,0,0.12)); border-radius: 4px;
+    padding: 1px 7px; font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.1em;
+    color: var(--ink);
+}
+.ft-tier-record, .ft-tier-pct { font-family: var(--mono); font-size: 12px; color: var(--ink); }
+.ft-tier-pct { color: #6B7280; margin-left: auto; }
+.ft-last5 { list-style: none; padding: 0; margin: 6px 0 0; }
+.ft-last5 li { font-family: var(--mono); font-size: 11.5px; color: var(--ink); padding: 5px 0; border-top: 1px solid var(--rule, rgba(0,0,0,0.05)); }
+.ft-last5 .r-win { color: #1f7a1f; }
+.ft-last5 .r-loss { color: #9b2230; }
+@media (max-width: 600px) { .ft-intel-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

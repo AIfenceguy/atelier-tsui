@@ -918,13 +918,13 @@ async function buildFtIntelPanel(opp) {
             ${p.data ? `<div class="ft-play-data">${p.data}</div>` : ''}
             ${p.game_plan ? `
                 <div class="ft-play-row">
-                    <span class="ft-play-label">GAME PLAN</span>
-                    <p class="ft-play-text">${p.game_plan}</p>
+                    <span class="ft-play-label">Game plan</span>
+                    <p class="ft-play-text">${noEmoji(p.game_plan)}</p>
                 </div>` : ''}
             ${p.cue ? `
                 <div class="ft-play-row ft-play-cue">
-                    <span class="ft-play-label">IN-BOUT CUE</span>
-                    <p class="ft-play-text">${p.cue}</p>
+                    <span class="ft-play-label">In-bout cue</span>
+                    <p class="ft-play-text">${noEmoji(p.cue)}</p>
                 </div>` : ''}
         </article>
     `).join('');
@@ -940,50 +940,53 @@ async function buildFtIntelPanel(opp) {
     const pt = intel.pool_touches;
     const cb = intel.close_bouts;
     const days = intel.days_since_last_bout;
-    const headlinePlan = intel.headline_plan ? `<div class="ft-intel-headline-plan">${intel.headline_plan}</div>` : '';
+    // The intel data carries emoji and shouty caps from an older design; the
+    // page speaks in the site's voice, so strip them at render time.
+    const headlinePlan = intel.headline_plan ? `<div class="ft-intel-headline-plan">${noEmoji(intel.headline_plan)}</div>` : '';
+    const headline = intel.headline ? noEmoji(intel.headline) : '';
     wrap.innerHTML = `
         <div class="ft-intel-head">
-            <span class="ft-intel-label">FT Scout Intel</span>
+            <span class="ft-intel-label">Scout intel · from his results</span>
             <div class="ft-intel-ranks">${ranks}</div>
-            <a class="ft-intel-link" href="${intel.ft_url}" target="_blank" rel="noopener">↗ FT profile</a>
+            <a class="ft-intel-link" href="${intel.ft_url}" target="_blank" rel="noopener">Profile ↗</a>
         </div>
-        ${intel.headline ? `<div class="ft-intel-headline">${intel.headline}</div>` : (intel.tagline ? `<div class="ft-intel-tagline">${intel.tagline}</div>` : '')}
+        ${headline ? `<div class="ft-intel-headline">${headline}</div>` : (intel.tagline ? `<div class="ft-intel-tagline">${noEmoji(intel.tagline)}</div>` : '')}
         ${headlinePlan}
         ${playsHtml ? `<div class="ft-plays-stack">${playsHtml}</div>` : legacyInsights}
         <div class="ft-intel-grid">
             <div class="ft-stat">
-                <div class="ft-stat-label">CAREER</div>
+                <div class="ft-stat-label">Career bouts</div>
                 <div class="ft-stat-value">${intel.career_bouts}</div>
-                <div class="ft-stat-sub">${Math.round((intel.career_win_rate||0)*100)}% wr</div>
+                <div class="ft-stat-sub">${Math.round((intel.career_win_rate||0)*100)}% won</div>
             </div>
             <div class="ft-stat">
-                <div class="ft-stat-label">RECENT POOL</div>
+                <div class="ft-stat-label">Recent pools</div>
                 <div class="ft-stat-value">${intel.recent_record.pool.pct}%</div>
-                <div class="ft-stat-sub">${intel.recent_record.pool.w}-${intel.recent_record.pool.l}</div>
+                <div class="ft-stat-sub">${intel.recent_record.pool.w}–${intel.recent_record.pool.l}</div>
             </div>
             <div class="ft-stat">
-                <div class="ft-stat-label">RECENT DE</div>
+                <div class="ft-stat-label">Recent DE</div>
                 <div class="ft-stat-value">${intel.recent_record.de.pct}%</div>
-                <div class="ft-stat-sub">${intel.recent_record.de.w}-${intel.recent_record.de.l}</div>
+                <div class="ft-stat-sub">${intel.recent_record.de.w}–${intel.recent_record.de.l}</div>
             </div>
             ${cb && cb.total ? `<div class="ft-stat">
-                <div class="ft-stat-label">CLOSE (1-T)</div>
-                <div class="ft-stat-value">${cb.w}-${cb.l}</div>
+                <div class="ft-stat-label">Decided by one touch</div>
+                <div class="ft-stat-value">${cb.w}–${cb.l}</div>
                 <div class="ft-stat-sub">${cb.total} bouts</div>
             </div>` : ''}
             ${pt ? `<div class="ft-stat">
-                <div class="ft-stat-label">POOL AVG</div>
+                <div class="ft-stat-label">Pool average</div>
                 <div class="ft-stat-value">${pt.avg_for}–${pt.avg_against}</div>
-                <div class="ft-stat-sub">for–against</div>
+                <div class="ft-stat-sub">for and against</div>
             </div>` : ''}
             ${days !== undefined ? `<div class="ft-stat">
-                <div class="ft-stat-label">LAST BOUT</div>
+                <div class="ft-stat-label">Last bout</div>
                 <div class="ft-stat-value">${days}d</div>
                 <div class="ft-stat-sub">ago</div>
             </div>` : ''}
         </div>
-        ${vsTier ? `<details class="ft-tier-block"><summary>VS RATING TIER (lifetime)</summary><div class="ft-tier-list">${vsTier}</div></details>` : ''}
-        ${last5 ? `<details class="ft-last5-block"><summary>LAST 5 RANKED BOUTS</summary><ul class="ft-last5">${last5}</ul></details>` : ''}
+        ${vsTier ? `<details class="ft-tier-block"><summary>Against each rating · lifetime</summary><div class="ft-tier-list">${vsTier}</div></details>` : ''}
+        ${last5 ? `<details class="ft-last5-block"><summary>Last five ranked bouts</summary><ul class="ft-last5">${last5}</ul></details>` : ''}
     `;
     return wrap;
 }
