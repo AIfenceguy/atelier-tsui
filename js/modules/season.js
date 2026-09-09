@@ -49,6 +49,7 @@ const countsForY14 = (e) => OLDER.has(e.category) && (NATIONAL.has(e.tier) || RE
 
 // The intentions, in the order a parent reads them.
 const GROUPS = [
+    ['registered', 'Entered · going', 'Already signed up. The forecast is against the field as it stands today.'],
     ['anchor', 'Season anchors · national points', 'NACs, Junior Olympics and Nationals. The family goes; these fill the national slots.'],
     ['value', 'Best value for points', 'Real points for the money. Sorted by points per hundred dollars.'],
     ['confidence', 'Confidence builders · no national points', 'Regional youth events he would seed to win. Nothing counts nationally; what counts is winning on a Sunday.'],
@@ -180,12 +181,14 @@ export async function mountSeason(root) {
     // Cost per trip (this fencer's own days at that tournament), then intentions.
     const marks = Object.fromEntries((marksRes?.data || []).map((m) => [m.category, m]));
     const standing = Object.fromEntries((standRes?.data || []).map((s) => [s.category, s]));
-    const ctx = { profile, sibling, siblingGoals, goals, ts90: ts[90], primary: goals.focus_category || primaryCategory(profile.birth_year), watches, latestPrice, events, sycKeep: new Set(), marks, standing };
+    const registered = new Set(mine.map((m) => Number(m.ft_event_id)).filter(Boolean));
+    const ctx = { profile, sibling, siblingGoals, goals, ts90: ts[90], primary: goals.focus_category || primaryCategory(profile.birth_year), watches, latestPrice, events, sycKeep: new Set(), marks, standing, registered };
     for (const e of events) e.cost = tripCost(e, ctx);
     // One SYC counts per youth category: keep the best and one backup as
-    // value; the rest are insurance at best.
+    // value; the rest are insurance at best. The family's rule narrows the
+    // SYCs considered to the ones they will actually travel to.
     for (const cat of ['y12', 'y14']) {
-        const ranked = events.filter((e) => e.category === cat && e.tier === 'syc' && (e.projections[profile.name]?.points_exp || 0) >= 20)
+        const ranked = events.filter((e) => e.category === cat && e.tier === 'syc' && sycAllowed(e, ctx) && (e.projections[profile.name]?.points_exp || 0) >= 20)
             .map((e) => ({ e, pts: e.projections[profile.name].points_exp, ppd: e.cost?.total > 0 ? e.projections[profile.name].points_exp / e.cost.total * 100 : 0 }))
             .filter((x) => x.ppd >= 3 || siblingGoing(x.e, ctx))
             .sort((a, b) => b.ppd - a.ppd);
@@ -259,6 +262,7 @@ function verdict(e, ctx) {
     const travel = e.travel === 'fly' ? 'a flight' : e.travel === 'drive' ? 'a drive' : e.travel === 'local' ? 'a day trip' : 'travel';
     const g = e.group;
     if (p.pending) return { word: 'Reading', tone: INK_MUTE, why: 'The field has not been read yet.' };
+    if (g === 'registered') return { word: 'Entered', tone: GOOD, why: `Already signed up. On today's field he would start ${ordinal(p.seed_form)} of ${p.field_n}, likely ${ordinal(Math.round(p.median || p.exp))}, about ${Math.round(pts)} points${add != null ? `, ${Math.round(add)} of them new to his total` : ''}.` };
     if (g === 'anchor') return { word: 'Family trip', tone: GOOD, why: `A national event that fills one of his counted slots: about ${Math.round(pts)} points${add != null && add < pts - 1 ? `, of which ${Math.round(add)} actually raise his total` : ''}.` };
     if (g === 'value') return { word: 'Go', tone: GOOD, why: add != null && add > 0 ? `Adds about ${Math.round(add)} points to his ranking total for ${money(cost)} and ${travel}.` : `About ${Math.round(pts)} points on the day for ${money(cost)} and ${travel}.` };
     if (g === 'confidence') return { word: 'Go if it suits', tone: INK, why: `No national points here. He would start ${ordinal(p.seed_form)} of ${p.field_n}: a weekend of winning, which is worth something on its own.` };
@@ -272,6 +276,7 @@ function verdict(e, ctx) {
     if (!onLists) return { word: 'Skip', tone: BAD, why: `${catLabel(e.category)} is not on his plan this season.` };
     if (isRide) return { word: 'Skip', tone: BAD, why: `${catLabel(e.category)} only rides along, and nobody is at this venue anyway.` };
     if (playingUp && formDown) return { word: 'Skip', tone: BAD, why: `Playing up while he is losing ${ctx.ts90.losses_vs_weaker} of ${ctx.ts90.vs_weaker} bouts to weaker fencers. A bracket of losses, not points.` };
+    if (e.tier === 'syc' && !sycAllowed(e, ctx)) return { word: 'Skip', tone: BAD, why: `Family rule: local SYCs only (${(ctx.goals.allowed_syc || []).join(', ')}). ${Math.round(pts)} points on the day, but a flight for a result the local ones can give.` };
     if (e.tier === 'syc' && pts >= 20) return { word: 'Skip', tone: BAD, why: `Only one SYC counts and a better one is on the plan. Adds ${Math.round(add || 0)} to his total, whatever he scores on the day.` };
     if (e.tier === 'ryc') return { word: 'Skip', tone: BAD, why: `Regional youth events pay no national points, and this one is ${travel}${cost ? ` for ${money(cost)}` : ''}.` };
     if (pts >= 8 && cost > 0) return { word: 'Skip', tone: BAD, why: `${Math.round(pts)} points for ${money(cost)} and ${travel}. The drives on the plan pay three times better.` };
@@ -281,9 +286,21 @@ function verdict(e, ctx) {
 // ---------------------------------------------------------------------------
 // Intention: which group an event belongs in for this fencer.
 // ---------------------------------------------------------------------------
+// The family's SYC rule: when allowed_syc is set, only those tournaments (or
+// one already entered) are considered for the SYC slot.
+function sycAllowed(e, ctx) {
+    const allow = ctx.goals?.allowed_syc || [];
+    if (ctx.registered?.has(Number(e.ft_event_id))) return true;
+    if (!allow.length) return true;
+    const t = String(e.tournament || '').toLowerCase();
+    return allow.some((a) => t.includes(String(a).toLowerCase()));
+}
+
 function classify(e, ctx) {
     const p = e.projections[ctx.profile.name] || {};
+    if (ctx.registered?.has(Number(e.ft_event_id))) return 'registered';
     if (p.pending) return 'anchor';
+    if (e.tier === 'syc' && !sycAllowed(e, ctx)) return 'skip';
     const pts = p.points_exp || 0;
     const ppd = e.cost?.total > 0 ? pts / e.cost.total * 100 : null;
     const g = ctx.goals || {};
@@ -368,7 +385,7 @@ function pointsPlanCard(profile, cat, rows, ctx) {
 
     const slots = [];
     if (cat === 'y12' || cat === 'y14') {
-        const syc = rows.filter((e) => e.tier === 'syc' && e.group !== 'skip').sort((a, b) => P(b) - P(a));
+        const syc = rows.filter((e) => e.tier === 'syc' && e.group !== 'skip' && sycAllowed(e, ctx)).sort((a, b) => P(b) - P(a));
         const nat = rows.filter((e) => NATIONAL.has(e.tier) && e.group !== 'skip').sort((a, b) => P(b) - P(a));
         const cadetNat = cat === 'y14' ? ctx.events.filter((e) => countsForY14(e) && e.group !== 'skip').sort((a, b) => P(b) - P(a)) : [];
         // Best four results count, at most one of them an SYC: the SYC slot
