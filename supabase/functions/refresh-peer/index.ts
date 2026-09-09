@@ -113,6 +113,17 @@ Deno.serve(async (req) => {
     if (!who?.user) return json({ error: "sign in first" }, 401);
   }
   const body = await req.json().catch(() => ({}));
+  // A batch (tracker_ids) is read one fencer at a time with the same pause
+  // between pages, capped so one call stays inside the function's clock.
+  if (Array.isArray(body.tracker_ids)) {
+    const ids = [...new Set(body.tracker_ids.map(Number).filter(Boolean))].slice(0, 12);
+    const out: Record<string, string> = {};
+    for (const id of ids) {
+      out[String(id)] = await readOne(db, id, Boolean(body.force));
+      await sleep(DELAY_MS);
+    }
+    return json({ read: ids.length, results: out });
+  }
   const tid = Number(body.tracker_id);
   if (!tid) return json({ error: "tracker_id required" }, 400);
 
@@ -124,6 +135,34 @@ Deno.serve(async (req) => {
   }
 
   try {
+    const row = await fetchRow(db, tid, now);
+    await syncOpponent(db, tid, row);
+    return json({ cached: false, ...row });
+  } catch (err) {
+    return json({ error: String((err as Error).message || err) }, 502);
+  }
+});
+
+// One fencer, honouring the cache unless forced; returns a short status word.
+// deno-lint-ignore no-explicit-any
+async function readOne(db: any, tid: number, force: boolean): Promise<string> {
+  const now = new Date();
+  const { data: prev } = await db.from("peer_snapshot").select("*").eq("tracker_id", tid).maybeSingle();
+  if (!force && prev?.fetched_at && now.getTime() - new Date(prev.fetched_at).getTime() < FRESH_HOURS * 3600e3) {
+    await syncOpponent(db, tid, prev);
+    return "cached";
+  }
+  try {
+    const row = await fetchRow(db, tid, now);
+    await syncOpponent(db, tid, row);
+    return "read";
+  } catch (err) { return "failed: " + String((err as Error).message || err).slice(0, 60); }
+}
+
+// Profile page + strength page -> the snapshot row. Two reads, one pause.
+// deno-lint-ignore no-explicit-any
+async function fetchRow(db: any, tid: number, now: Date) {
+  {
     const ph = await page(`https://fencingtracker.com/p/${tid}/x`);
     const prof = parseProfile(ph, now);
     // The Registrations tab is only served to logged-in FencingTracker users,
@@ -141,10 +180,7 @@ Deno.serve(async (req) => {
     try { strength = parseStrength(await page(`https://fencingtracker.com/p/${tid}/x/strength`)); } catch (_) { /* none */ }
     const row = { tracker_id: tid, name: prof.name, club: prof.club, rating: prof.rating, birth_year: prof.birth_year, ...strength, registrations, results: prof.results, fetched_at: now.toISOString() };
     const up = await db.from("peer_snapshot").upsert(row);
-    if (up.error) return json({ error: up.error.message }, 500);
-    await syncOpponent(db, tid, row);
-    return json({ cached: false, ...row });
-  } catch (err) {
-    return json({ error: String((err as Error).message || err) }, 502);
+    if (up.error) throw new Error(up.error.message);
+    return row;
   }
-});
+}

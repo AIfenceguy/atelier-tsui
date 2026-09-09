@@ -387,16 +387,20 @@ async function tierBlock(e, profile, goal, oppById, winsById, flagsById, cachedB
         ]);
         rb.onclick = async () => {
             rb.disabled = true;
+            const ids = tier.map((t) => Number(t.tracker_id)).filter(Boolean);
             let done = 0, failed = 0;
-            for (const t of tier) {
-                rb.textContent = `Reading ${done + 1} of ${tier.length}…`;
+            // Twelve per call; the function reads them one at a time.
+            for (let i = 0; i < ids.length; i += 12) {
+                const chunk = ids.slice(i, i + 12);
+                rb.textContent = `Reading ${Math.min(i + chunk.length, ids.length)} of ${ids.length}…`;
                 try {
-                    const { data, error } = await supa.functions.invoke('refresh-peer', { body: { tracker_id: Number(t.tracker_id), force: true } });
-                    if (error || data?.error) failed += 1;
-                } catch (_) { failed += 1; }
-                done += 1;
+                    const { data, error } = await supa.functions.invoke('refresh-peer', { body: { tracker_ids: chunk, force: true } });
+                    if (error || data?.error) failed += chunk.length;
+                    else failed += Object.values(data?.results || {}).filter((s) => String(s).startsWith('failed')).length;
+                } catch (_) { failed += chunk.length; }
+                done += chunk.length;
             }
-            if (failed) toast(`${failed} of ${tier.length} could not be read`, 'error');
+            if (failed) toast(`${failed} of ${ids.length} could not be read`, 'error');
             location.reload();
         };
         wrap.appendChild(rb);
