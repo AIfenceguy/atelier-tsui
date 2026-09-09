@@ -25,13 +25,24 @@ function youthTable(cat) {
     }
     return t;
 }
-// 2026-27 Cadet Trial table (same as cadet_trial_points() in the database).
-const CADET = {
-    elite: [[1, 600], [2, 414], [4, 281.4], [8, 188.4], [16, 124.2], [32, 81], [64, 51.6], [128, 32.4], [256, 19.8]],
-    challenger: [[1, 120], [2, 96], [4, 76.8], [8, 61.2], [16, 49.2], [32, 39.6], [64, 31.8], [128, 25.2], [256, 20.4]],
-    sjcc: [[1, 90], [2, 74], [4, 60], [8, 49], [16, 40], [32, 33], [64, 27], [128, 22], [256, 18]],
-    regional: [[1, 60], [2, 51], [4, 43.2], [8, 36.6], [16, 31.2], [32, 26.4], [64, 22.2], [128, 18.6], [256, 15.6]]
+// 2026-27 Trial tables (USA Fencing, 29 Jul 2026): Division I and Senior
+// values; Junior is 80% of them, Cadet 60%. Bands 1, 2, 4, 8, 16, 32, 64,
+// 128, 256, 512. Same numbers as trial_points() in the database.
+const BANDS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512];
+const DIV1 = {
+    elite: [1000, 690, 469, 314, 207, 135, 86, 54, 33, 20],
+    challenger: [200, 160, 128, 102, 82, 66, 53, 42, 34, 27],
+    sjcc: [150, 122.5, 100, 82.5, 67.5, 55, 45, 37.5, 30, 25],
+    regional: [100, 85, 72, 61, 52, 44, 37, 31, 26, 22],
+    local: [50, 45, 41, 37, 33, 30, 27, 24, 22, 20]
 };
+const FACTOR = { div1: 1, senior: 1, junior: 0.8, cadet: 0.6 };
+function trialPoints(group, tier, place) {
+    const v = DIV1[tier], f = FACTOR[group];
+    if (!v || !f) return 0;
+    const i = BANDS.findIndex((b) => place <= b);
+    return i < 0 ? 0 : +(v[i] * f).toFixed(1);
+}
 
 export function pointsFor(category, tier, place, fieldSize) {
     const cat = String(category || '').toLowerCase();
@@ -45,10 +56,12 @@ export function pointsFor(category, tier, place, fieldSize) {
         }
         return 0; // RYC: regional points only
     }
-    if (cat === 'cadet') {
-        const key = t === 'nac' ? 'challenger' : (t === 'sjcc' ? 'sjcc' : (t === 'elite' ? 'elite' : 'regional'));
+    if (cat === 'cadet' || cat === 'junior' || cat === 'div1') {
+        // NAC entries are scored on the Challenger table unless told 'elite';
+        // Junior Olympics and Nationals pay the Elite table in the Elite bracket.
+        const key = t === 'nac' || t === 'jo' || t === 'nationals' ? 'challenger' : (t === 'sjcc' ? 'sjcc' : t === 'elite' ? 'elite' : t === 'local' ? 'local' : 'regional');
         if (key === 'sjcc' && place > Math.min(64, Math.ceil(fieldSize * 0.4))) return 0;
-        for (const [lim, pts] of CADET[key]) if (place <= lim) return pts;
+        return trialPoints(cat, key, place);
     }
     return 0;
 }
@@ -181,5 +194,6 @@ export const tierOf = (title, category) => {
 };
 export const categoryOf = (name) => {
     const n = String(name || '').toLowerCase();
-    return /youth 12|y-?12/.test(n) ? 'y12' : /youth 14|y-?14/.test(n) ? 'y14' : /cadet/.test(n) ? 'cadet' : /junior/.test(n) ? 'junior' : null;
+    return /youth 12|y-?12/.test(n) ? 'y12' : /youth 14|y-?14/.test(n) ? 'y14' : /cadet/.test(n) ? 'cadet' : /junior/.test(n) ? 'junior'
+        : /division i\b|div ?1\b|div i\b/.test(n) && !/division i[ai]|div ?2|div ?3/.test(n) ? 'div1' : null;
 };

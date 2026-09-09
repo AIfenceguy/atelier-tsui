@@ -43,7 +43,9 @@ const NATIONAL = new Set(['nac', 'jo', 'nationals', 'sjcc']);
 // posted standing shows one, the plan counts only Cadet NAC / JO / SJCC /
 // Nationals results toward Y14. Flip this when the portal proves otherwise.
 const REGIONAL_CADET_COUNTS_FOR_Y14 = false;
-const countsForY14 = (e) => e.category === 'cadet' && (NATIONAL.has(e.tier) || REGIONAL_CADET_COUNTS_FOR_Y14);
+// The youth rule: "any national Cadet, Junior, Div I events" count for Y14.
+const OLDER = new Set(['cadet', 'junior', 'div1']);
+const countsForY14 = (e) => OLDER.has(e.category) && (NATIONAL.has(e.tier) || REGIONAL_CADET_COUNTS_FOR_Y14);
 
 // The intentions, in the order a parent reads them.
 const GROUPS = [
@@ -293,16 +295,18 @@ function classify(e, ctx) {
 
     // Ride-along categories: at a national event only when the brother is
     // going; at a regional only when someone is at that venue anyway, and not
-    // while he is playing up with his form down.
-    if (isRide) {
+    // while he is playing up with his form down. An older category that
+    // counts for a Y14 focus is never a mere ride-along at a national.
+    if (isRide && !(ctx.primary === 'y14' && NATIONAL.has(e.tier) && countsForY14(e))) {
         if (NATIONAL.has(e.tier)) return sibGoing ? 'addon' : 'skip';
         return (sibGoing || selfGoing) && !(playingUp && formDown) ? 'addon' : 'skip';
     }
 
     if (NATIONAL.has(e.tier)) {
         // A national event anchors the season when it fills a slot in the
-        // focus category, or a cadet national result that also counts for Y14.
-        if (isFocus || (e.category === 'cadet' && ctx.primary === 'y14')) return pts >= 3 ? 'anchor' : 'skip';
+        // focus category, or when it is an older-category result that also
+        // counts for Y14 (Cadet, Junior, Division I).
+        if (isFocus || (ctx.primary === 'y14' && countsForY14(e))) return pts >= 3 ? 'anchor' : 'skip';
         return (sibGoing || selfGoing) ? 'addon' : 'skip';
     }
     if (playingUp && formDown) return (sibGoing || selfGoing) && pts >= 8 ? 'addon' : 'skip';
@@ -366,7 +370,7 @@ function pointsPlanCard(profile, cat, rows, ctx) {
         // plus the three best national results, whichever category they come from.
         const pool = [
             ...nat.map((e) => ({ name: e.tier === 'nationals' ? 'Summer Nationals' : 'NAC', ev: e })),
-            ...cadetNat.map((e) => ({ name: 'Cadet national, counts for Y14', ev: e }))
+            ...cadetNat.map((e) => ({ name: `${catLabel(e.category)} national, counts for Y14`, ev: e }))
         ].sort((a, b) => P(b.ev) - P(a.ev));
         if (syc[0]) slots.push({ name: 'One SYC counts', ev: syc[0], alt: syc[1] });
         for (const s of pool.slice(0, syc[0] ? 3 : 4)) slots.push(s);
