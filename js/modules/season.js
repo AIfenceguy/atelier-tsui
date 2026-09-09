@@ -213,6 +213,7 @@ export async function mountSeason(root) {
         }
         body.appendChild(groupCard(key, t, s, rows, ctx, refreshed));
     }
+    body.appendChild(await peersCard(profile, events));
     body.appendChild(howToRead(profile, sibling));
     body.appendChild(addEventCard(profile));
     body.appendChild(recentBouts(boutRes.data || [], profile));
@@ -625,6 +626,87 @@ function strengthCard(profile, ts, myForm) {
                 : 'Pools and DE are in step; his seed matches how he fences.'
         ]));
     }
+    return wrap;
+}
+
+// ---------------------------------------------------------------------------
+// Fencers to watch: the ones just above him on the standings. What they
+// count, where they are registered, and which of those weekends are on his
+// plan. Read on demand, one profile at a time, cached three days.
+// ---------------------------------------------------------------------------
+async function peersCard(profile, events) {
+    const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
+    const { data: peers } = await supa.from('peers').select('*').eq('profile_id', profile.id).order('added_at');
+    const ids = (peers || []).map((p) => Number(p.tracker_id));
+    const { data: snaps } = ids.length ? await supa.from('peer_snapshot').select('*').in('tracker_id', ids) : { data: [] };
+    const snapOf = new Map((snaps || []).map((s) => [Number(s.tracker_id), s]));
+    wrap.appendChild(label('Fencers to watch · just above him on the standings'));
+    wrap.appendChild(serif(peers?.length ? `${peers.length} fencers` : 'Nobody watched yet', '24px'));
+    wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '13px', margin: '4px 0 10px', lineHeight: '1.5' } }, [
+        'The kids a few places above him: what they enter, what they count, and where he will meet them. The pattern to copy is theirs, not the crowd\'s.'
+    ]));
+    const planTournaments = new Set(events.filter((e) => e.group && e.group !== 'skip').map((e) => e.tournament.toLowerCase()));
+    const list = el('div', {});
+    for (const p of peers || []) {
+        const s = snapOf.get(Number(p.tracker_id));
+        const row = el('div', { style: { padding: '10px 0', borderTop: '1px solid var(--rule)' } });
+        row.appendChild(el('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'baseline', flexWrap: 'wrap' } }, [
+            el('a', { href: `https://fencingtracker.com/p/${p.tracker_id}/x`, target: '_blank', rel: 'noopener', style: { fontFamily: 'var(--serif)', fontStyle: 'italic', fontWeight: '700', fontSize: '19px', color: INK, textDecoration: 'none' } }, [s?.name || p.name || `#${p.tracker_id}`]),
+            el('span', { class: 'label', style: { color: INK_MUTE } }, [[p.note, s?.club, s?.rating, s?.birth_year ? `born ${s.birth_year}` : null, s?.strength_de ? `DE ${s.strength_de}` : null].filter(Boolean).join(' · ')])
+        ]));
+        if (!s) {
+            row.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '4px 0 0' } }, ['Not read yet.']));
+        } else {
+            const regs = (s.registrations || []).filter((r) => r.d >= new Date().toISOString().slice(0, 10) || !r.d);
+            const meet = regs.filter((r) => planTournaments.has(String(r.tournament).toLowerCase()));
+            const byT = new Map();
+            for (const r of regs) { const k = r.tournament; if (!byT.has(k)) byT.set(k, []); byT.get(k).push(String(r.event).replace(/\s*\(.*$/, '').replace(/Men's Foil/i, '').trim()); }
+            if (byT.size) {
+                row.appendChild(el('p', { style: { color: INK, fontSize: '13px', margin: '4px 0 0', lineHeight: '1.5' } }, [
+                    el('b', {}, ['Entered: ']), [...byT.entries()].map(([t, ev]) => `${t} (${ev.join(', ')})`).join(' · ')
+                ]));
+            }
+            if (meet.length) {
+                row.appendChild(el('p', { style: { color: WARN, fontSize: '13px', margin: '2px 0 0', lineHeight: '1.5', fontWeight: '700' } }, [
+                    `On his plan too: ${[...new Set(meet.map((r) => r.tournament))].join(', ')}.`
+                ]));
+            }
+            const res = (s.results || []).slice(0, 6);
+            if (res.length) {
+                row.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '4px 0 0', lineHeight: '1.5' } }, [
+                    el('b', { style: { color: INK } }, ['Recent: ']), res.map((r) => `${r.event.replace(/Men's Foil/i, '').trim()} ${r.place}/${r.field} (${String(r.d).slice(5)})`).join(' · ')
+                ]));
+            }
+        }
+        const btn = el('button', { class: 'btn btn-ghost btn-sm btn-mono-label', style: { marginTop: '6px' } }, [s ? 'Re-read' : 'Read his record']);
+        btn.onclick = async () => {
+            btn.disabled = true; btn.textContent = 'Reading…';
+            try {
+                const { data, error } = await supa.functions.invoke('refresh-peer', { body: { tracker_id: Number(p.tracker_id), force: Boolean(s) } });
+                if (error || data?.error) throw new Error(error?.message || data?.error);
+                location.reload();
+            } catch (err) { btn.disabled = false; btn.textContent = 'Read his record'; toast('Could not read: ' + (err.message || err), 'error'); }
+        };
+        row.appendChild(btn);
+        list.appendChild(row);
+    }
+    wrap.appendChild(list);
+    // Add one by pasting a FencingTracker profile link.
+    const input = el('input', { type: 'text', class: 'field-input', placeholder: 'https://fencingtracker.com/p/100316398/…', autocomplete: 'off', style: { marginTop: '10px', color: INK } });
+    const add = el('button', { class: 'btn btn-mono-label', style: { width: '100%', marginTop: '8px' } }, ['Watch this fencer']);
+    add.onclick = async () => {
+        const m = String(input.value).match(/\/p\/(\d{6,10})/) || String(input.value).match(/(\d{6,10})/);
+        if (!m) { toast('Paste a FencingTracker profile link', 'error'); return; }
+        add.disabled = true; add.textContent = 'Reading…';
+        try {
+            const tid = Number(m[1]);
+            const { data, error } = await supa.functions.invoke('refresh-peer', { body: { tracker_id: tid } });
+            if (error || data?.error) throw new Error(error?.message || data?.error);
+            await safeWrite({ table: 'peers', op: 'upsert', onConflict: 'profile_id,tracker_id', payload: { profile_id: profile.id, tracker_id: tid, name: data?.name || null } });
+            location.reload();
+        } catch (err) { add.disabled = false; add.textContent = 'Watch this fencer'; toast('Could not add: ' + (err.message || err), 'error'); }
+    };
+    wrap.appendChild(input); wrap.appendChild(add);
     return wrap;
 }
 
