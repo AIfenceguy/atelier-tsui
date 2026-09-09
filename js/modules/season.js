@@ -22,6 +22,8 @@ import { safeWrite } from '../lib/offline.js';
 import { forecast, tierOf, categoryOf } from '../lib/season-model.js';
 import { estimateTrip, withLiveFare, milesBetween } from '../lib/trip-cost.js';
 import { canSeeSeason, canSeeCosts, isParent } from '../lib/visibility.js';
+import { go } from '../lib/router.js';
+import { stageOf } from '../lib/lost-bouts.js';
 
 const INK = 'var(--ink)';
 // Literal: var(--ink-mute) composites below AA on the cream surface.
@@ -131,7 +133,8 @@ export async function mountSeason(root) {
     body.appendChild(el('div', { class: 'empty' }, [el('p', { class: 'empty-line' }, ['Reading the fields…'])]));
 
     const today = new Date().toISOString().slice(0, 10);
-    const [tsRes, evRes, watchRes, priceRes, boutRes, refreshRes, mineRes, homeRes, runRes, sibRes, marksRes, goalsRes, standRes, airRes] = await Promise.all([
+    const since180 = new Date(Date.now() - 180 * 864e5).toISOString().slice(0, 10);
+    const [tsRes, evRes, watchRes, priceRes, boutRes, refreshRes, mineRes, homeRes, runRes, sibRes, marksRes, goalsRes, standRes, airRes, allBoutsRes, journalRes] = await Promise.all([
         supa.from('true_strength').select('*').eq('profile_id', profile.id),
         supa.from('season_events').select('*').gte('start_date', today).order('start_date'),
         supa.from('flight_watches').select('id,label,destination,depart_date,return_date,hotel_nightly_rate,booked_out_cash,booked_ret_cash,passengers').is('deleted_at', null),
@@ -145,7 +148,11 @@ export async function mountSeason(root) {
         supa.from('standings_marks').select('*').eq('weapon', 'MF'),
         supa.from('fencer_goals').select('*'),
         supa.from('fencer_standings').select('*').eq('profile_id', profile.id),
-        supa.from('airports').select('*')
+        supa.from('airports').select('*'),
+        // Behind the strength card: every rated bout in the six-month window,
+        // and the journal entries that already tell the story of some of them.
+        supa.from('fencer_bouts').select('*').eq('profile_id', profile.id).gte('bout_date', since180).order('bout_date', { ascending: false }).order('bout_no'),
+        supa.from('bouts').select('id,date,my_score,their_score,opponent_tracker_id,source_bout_id,reflection').eq('profile_id', profile.id).is('deleted_at', null).gte('date', since180)
     ]);
     body.innerHTML = '';
     if (runRes?.data?.finished_at) {
@@ -227,7 +234,7 @@ export async function mountSeason(root) {
     const focusFirst = events.slice().sort((a, b) => (a.category === ctx.primary ? 0 : 1) - (b.category === ctx.primary ? 0 : 1));
     for (const e of focusFirst) e.group = classify(e, ctx);
 
-    body.appendChild(strengthCard(profile, ts, myForm));
+    body.appendChild(strengthCard(profile, ts, myForm, { bouts: allBoutsRes.data || [], journal: journalRes.data || [] }));
     body.appendChild(goalsCard(profile, goals, sibling));
     body.appendChild(primerCard(goals));
     const planCats = [ctx.primary, ...(goals.secondary || [])].filter((c, i, a) => c && a.indexOf(c) === i && events.some((e) => e.category === c));
@@ -923,7 +930,7 @@ async function applyLiveForecasts(events, refreshed, profile, myForm) {
 // ---------------------------------------------------------------------------
 // Strength: official, and what the last 3 and 6 months of bouts say.
 // ---------------------------------------------------------------------------
-function strengthCard(profile, ts, myForm) {
+function strengthCard(profile, ts, myForm, drill = {}) {
     const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
     const de = profile.strength_de, pool = profile.strength_pool;
     const gap90 = ts[90]?.perf_minus_official;
@@ -936,24 +943,93 @@ function strengthCard(profile, ts, myForm) {
     wrap.appendChild(el('div', { class: 'label', style: { color: INK_MUTE, margin: '2px 0 10px' } }, [
         `Official DE strength ${de ?? '—'} · pool strength ${pool ?? '—'} · seeded on this screen at ${myForm}`
     ]));
+    // Every number is a door. Tap it and the bouts it counts open under the
+    // grid, grouped the way the true_strength view groups them: the window is
+    // the last 90 or 180 days, "stronger" is an opponent rated above his
+    // official DE strength, "weaker" at or below it, rated opponents only.
+    const all = (drill.bouts || []).filter((b) => b.opponent_strength != null);
+    const journal = drill.journal || [];
+    const sinceFor = (days) => new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+    const inWindow = (days) => all.filter((b) => b.bout_date >= sinceFor(days));
     const rowsSpec = [
-        ['Performance', (t) => t.performance_rating, (t) => t.perf_minus_official >= 60 ? GOOD : t.perf_minus_official <= -60 ? BAD : INK],
-        ['vs official', (t) => (t.perf_minus_official > 0 ? '+' : '') + t.perf_minus_official, (t) => t.perf_minus_official >= 60 ? GOOD : t.perf_minus_official <= -60 ? BAD : INK],
-        ['Record', (t) => `${t.wins}–${t.bouts - t.wins}`, () => INK],
-        ['Beat stronger', (t) => `${t.wins_vs_stronger} of ${t.vs_stronger}`, (t) => t.wins_vs_stronger > 0 ? GOOD : INK],
-        ['Lost to weaker', (t) => `${t.losses_vs_weaker} of ${t.vs_weaker}`, (t) => t.losses_vs_weaker > t.vs_weaker * 0.25 ? BAD : INK],
-        ['Best win', (t) => t.best_win_strength ?? '—', () => GOOD],
-        ['Worst loss', (t) => t.worst_loss_strength ?? '—', () => BAD],
-        ['Bouts', (t) => t.bouts, () => INK]
+        ['Performance', (t) => t.performance_rating, (t) => t.perf_minus_official >= 60 ? GOOD : t.perf_minus_official <= -60 ? BAD : INK, 'all',
+            'Every rated bout in the window. The performance rating is the strength that would produce exactly this record against exactly these opponents: wins over strong fencers lift it, losses to weaker ones sink it.'],
+        ['vs official', (t) => (t.perf_minus_official > 0 ? '+' : '') + t.perf_minus_official, (t) => t.perf_minus_official >= 60 ? GOOD : t.perf_minus_official <= -60 ? BAD : INK, 'all',
+            `The gap between that performance and his official DE strength of ${de ?? '—'}. These are the bouts behind it.`],
+        ['Record', (t) => `${t.wins}–${t.bouts - t.wins}`, () => INK, 'all', 'Wins and losses, pools and DE together, newest first.'],
+        ['Beat stronger', (t) => `${t.wins_vs_stronger} of ${t.vs_stronger}`, (t) => t.wins_vs_stronger > 0 ? GOOD : INK, 'stronger',
+            `Bouts against fencers rated above his official ${de ?? '—'}, strongest first. The wins are the ones that move his ranking.`],
+        ['Lost to weaker', (t) => `${t.losses_vs_weaker} of ${t.vs_weaker}`, (t) => t.losses_vs_weaker > t.vs_weaker * 0.25 ? BAD : INK, 'weaker',
+            `Bouts against fencers rated at or below ${de ?? '—'}, losses first. Each loss here is a bout he was expected to win.`],
+        ['Best win', (t) => t.best_win_strength ?? '—', () => GOOD, 'best', 'The strongest fencer he beat in the window.'],
+        ['Worst loss', (t) => t.worst_loss_strength ?? '—', () => BAD, 'worst', 'The weakest fencer he lost to in the window.'],
+        ['Bouts', (t) => t.bouts, () => INK, 'all', 'Every bout against a rated opponent in the window.']
     ];
+    const byDate = (a, b) => b.bout_date.localeCompare(a.bout_date) || (a.bout_no || 0) - (b.bout_no || 0);
+    const pick = (kind, days) => {
+        const w = inWindow(days);
+        if (kind === 'stronger') return w.filter((b) => b.opponent_strength > de).sort((a, b) => b.opponent_strength - a.opponent_strength || byDate(a, b));
+        if (kind === 'weaker') return w.filter((b) => b.opponent_strength <= de).sort((a, b) => (a.result === 'D' ? 0 : 1) - (b.result === 'D' ? 0 : 1) || byDate(a, b));
+        if (kind === 'best') { const wins = w.filter((b) => b.result === 'V'); const m = Math.max(...wins.map((b) => b.opponent_strength)); return wins.filter((b) => b.opponent_strength === m); }
+        if (kind === 'worst') { const losses = w.filter((b) => b.result === 'D'); const m = Math.min(...losses.map((b) => b.opponent_strength)); return losses.filter((b) => b.opponent_strength === m); }
+        return w.slice().sort(byDate);
+    };
+    const journalFor = (b) => journal.find((x) => x.source_bout_id === b.id)
+        || journal.find((x) => x.opponent_tracker_id && x.opponent_tracker_id === b.opponent_tracker_id && x.date === b.bout_date && x.my_score === b.score_for && x.their_score === b.score_against);
+    const fmtDay = (iso) => new Date(String(iso).slice(0, 10) + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const boutRow = (b) => {
+        const won = b.result === 'V';
+        const j = journalFor(b);
+        const right = el('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', flexShrink: '0' } }, [
+            el('span', { class: 'num', style: { color: won ? GOOD : BAD, fontWeight: '700', fontSize: '15px', whiteSpace: 'nowrap' } }, [`${won ? 'W' : 'L'} ${b.score_for}–${b.score_against}`])
+        ]);
+        if (j) right.appendChild(el('a', { href: `#bouts/show?id=${j.id}`, class: 'btn btn-ghost btn-sm btn-mono-label', style: { textDecoration: 'none' }, title: j.reflection || 'In the journal' }, ['Journal']));
+        else if (!won) { const btn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm btn-mono-label' }, ['Log it']); btn.onclick = () => go('bouts/new', { from: b.id }); right.appendChild(btn); }
+        return el('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', padding: '6px 0', borderTop: '1px solid var(--rule)' } }, [
+            el('div', { style: { minWidth: '0' } }, [
+                el('div', { style: { color: INK, fontSize: '14px', fontWeight: '600' } }, [b.opponent || 'Unknown', el('span', { class: 'num', style: { color: b.opponent_strength > de ? WARN : INK_MUTE, fontWeight: '600', marginLeft: '8px', fontSize: '13px' } }, [String(b.opponent_strength)])]),
+                el('div', { class: 'label', style: { color: INK_MUTE, marginTop: '2px' } }, [[fmtDay(b.bout_date), b.tournament, catLabel(b.category), stageOf(b) === 'de' ? 'DE' : 'Pool', b.difficulty].filter(Boolean).join(' · ')])
+            ]),
+            right
+        ]);
+    };
+    const detail = el('div', { style: { marginTop: '12px', borderTop: '1px solid var(--rule)', paddingTop: '10px' } });
+    detail.hidden = true;
+    let open = null;
+    const cells = new Map();
+    const show = (i, days) => {
+        const key = `${i}:${days}`;
+        for (const [k, c] of cells) c.style.borderBottom = k === key && open !== key ? `2px solid ${INK}` : '2px solid transparent';
+        if (open === key) { open = null; detail.hidden = true; return; }
+        open = key;
+        const [lbl, , , kind, why] = rowsSpec[i];
+        const list = pick(kind, days);
+        detail.innerHTML = '';
+        detail.appendChild(label(`${lbl} · last ${days === 90 ? '3' : '6'} months · ${list.length} bout${list.length === 1 ? '' : 's'}`, INK, { fontWeight: '700' }));
+        detail.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '2px 0 4px', lineHeight: '1.5' } }, [why]));
+        if (!list.length) detail.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '13px', margin: '6px 0 0' } }, ['No bouts in this window yet.']));
+        for (const b of list) detail.appendChild(boutRow(b));
+        detail.hidden = false;
+    };
     const grid = el('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(92px, 1.2fr) 1fr 1fr', columnGap: '12px', rowGap: '6px', alignItems: 'baseline' } });
     grid.appendChild(el('span', {}, ['']));
     grid.appendChild(label('Last 3 months', INK, { fontWeight: '700' }));
     grid.appendChild(label('Last 6 months', INK, { fontWeight: '700' }));
     const t90 = ts[90], t180 = ts[180];
-    const cell = (t, get, col) => t && t.bouts ? num(String(get(t)), col(t), '18px') : el('span', { class: 'label', style: { color: INK_MUTE } }, ['—']);
-    for (const [lbl, get, col] of rowsSpec) { grid.appendChild(label(lbl)); grid.appendChild(cell(t90, get, col)); grid.appendChild(cell(t180, get, col)); }
+    const cell = (t, get, col, i, days) => {
+        if (!t || !t.bouts) return el('span', { class: 'label', style: { color: INK_MUTE } }, ['—']);
+        const btn = el('button', {
+            type: 'button', class: 'num', title: 'Show the bouts behind this number',
+            style: { background: 'none', border: 'none', borderBottom: '2px solid transparent', padding: '0', margin: '0', cursor: 'pointer', font: 'inherit', color: col(t), fontSize: '18px', fontWeight: '600', textDecoration: 'underline dotted', textDecorationColor: '#9CA3AF', textUnderlineOffset: '5px', textAlign: 'left' }
+        }, [String(get(t))]);
+        btn.onclick = () => show(i, days);
+        cells.set(`${i}:${days}`, btn);
+        return btn;
+    };
+    rowsSpec.forEach(([lbl, get, col], i) => { grid.appendChild(label(lbl)); grid.appendChild(cell(t90, get, col, i, 90)); grid.appendChild(cell(t180, get, col, i, 180)); });
     wrap.appendChild(grid);
+    if (all.length) wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '8px 0 0' } }, ['Tap any number to see the bouts behind it.']));
+    wrap.appendChild(detail);
     if (de && pool) {
         const g = de - pool;
         wrap.appendChild(el('p', { style: { color: g >= 200 ? WARN : INK, fontSize: '13px', margin: '12px 0 0', lineHeight: '1.5', fontWeight: g >= 200 ? '700' : '500' } }, [
