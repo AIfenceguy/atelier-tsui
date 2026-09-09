@@ -17,7 +17,7 @@ export async function homeCard(session) {
         home?.home_city ? home.home_city : 'No home set yet'
     ]);
     wrap.appendChild(current);
-    const addr = el('input', { type: 'text', class: 'field-input', placeholder: 'Street, city, state, ZIP', value: home?.home_address || '', autocomplete: 'street-address', style: { color: INK } });
+    const addr = el('input', { type: 'text', class: 'field-input', placeholder: 'ZIP code, or street, city, state', value: home?.home_address || '', autocomplete: 'postal-code', style: { color: INK } });
     const hotel = el('input', { type: 'number', class: 'field-input', min: 100, max: 400, step: 10, value: String(home?.hotel_night ?? 180), style: { color: INK } });
     const btn = el('button', { class: 'btn btn-primary btn-mono-label', style: { width: '100%', marginTop: '10px' } }, [home ? 'Update home' : 'Save home']);
     const note = el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '8px 0 0', lineHeight: '1.5' } }, [

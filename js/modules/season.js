@@ -20,7 +20,7 @@ import { supa } from '../lib/supa.js';
 import { activeProfile } from '../lib/state.js';
 import { safeWrite } from '../lib/offline.js';
 import { forecast, tierOf, categoryOf } from '../lib/season-model.js';
-import { estimateTrip, withLiveFare } from '../lib/trip-cost.js';
+import { estimateTrip, withLiveFare, milesBetween } from '../lib/trip-cost.js';
 
 const INK = 'var(--ink)';
 // Literal: var(--ink-mute) composites below AA on the cream surface.
@@ -49,7 +49,8 @@ const countsForY14 = (e) => OLDER.has(e.category) && (NATIONAL.has(e.tier) || RE
 
 // The intentions, in the order a parent reads them.
 const GROUPS = [
-    ['registered', 'Entered · going', 'Already signed up. The forecast is against the field as it stands today.'],
+    ['registered', 'Going', 'Confirmed trips. Odds and the registered field as it stands today; cost per person.'],
+    ['considering', 'Considering', 'On the shortlist. Same odds, same field, priced per person, waiting on a yes.'],
     ['anchor', 'Season anchors · national points', 'NACs, Junior Olympics and Nationals. The family goes; these fill the national slots.'],
     ['value', 'Best value for points', 'Real points for the money. Sorted by points per hundred dollars.'],
     ['confidence', 'Confidence builders · no national points', 'Regional youth events he would seed to win. Nothing counts nationally; what counts is winning on a Sunday.'],
@@ -76,9 +77,11 @@ function stat(lbl, value, color = INK) {
     return el('div', { style: { minWidth: '76px' } }, [label(lbl), el('div', {}, [num(String(value ?? '—'), color, '18px')])]);
 }
 
-// Set once per mount: the family's home and the geocoded venue cities.
+// Set once per mount: the family's home, the geocoded venue cities, and the
+// airports they can realistically fly from.
 let HOME = null;
 let PLACES = new Map();
+let AIRPORTS = [];
 
 // USA Fencing age categories for the 2026-27 season, by birth year. The
 // youngest category he is eligible for is his own; anything older is playing up.
@@ -115,7 +118,7 @@ export async function mountSeason(root) {
     body.appendChild(el('div', { class: 'empty' }, [el('p', { class: 'empty-line' }, ['Reading the fields…'])]));
 
     const today = new Date().toISOString().slice(0, 10);
-    const [tsRes, evRes, watchRes, priceRes, boutRes, refreshRes, mineRes, homeRes, runRes, sibRes, marksRes, goalsRes, standRes] = await Promise.all([
+    const [tsRes, evRes, watchRes, priceRes, boutRes, refreshRes, mineRes, homeRes, runRes, sibRes, marksRes, goalsRes, standRes, airRes] = await Promise.all([
         supa.from('true_strength').select('*').eq('profile_id', profile.id),
         supa.from('season_events').select('*').gte('start_date', today).order('start_date'),
         supa.from('flight_watches').select('id,label,destination,depart_date,return_date,hotel_nightly_rate,booked_out_cash,booked_ret_cash,passengers').is('deleted_at', null),
@@ -128,7 +131,8 @@ export async function mountSeason(root) {
         supa.from('profiles').select('id,name,birth_year,strength_de,strength_pool,tracker_id').eq('kind', 'fencer'),
         supa.from('standings_marks').select('*').eq('weapon', 'MF'),
         supa.from('fencer_goals').select('*'),
-        supa.from('fencer_standings').select('*').eq('profile_id', profile.id)
+        supa.from('fencer_standings').select('*').eq('profile_id', profile.id),
+        supa.from('airports').select('*')
     ]);
     body.innerHTML = '';
     if (runRes?.data?.finished_at) {
@@ -138,6 +142,8 @@ export async function mountSeason(root) {
     }
 
     HOME = homeRes.data?.home_lat != null ? { lat: homeRes.data.home_lat, lng: homeRes.data.home_lng, city: homeRes.data.home_city, hotel_night: homeRes.data.hotel_night } : null;
+    // Airports within about 75 minutes of home: 75 road miles is the working radius.
+    AIRPORTS = HOME ? (airRes?.data || []).map((a) => ({ ...a, miles: Math.round(milesBetween(HOME, a) || 9999) })).filter((a) => a.miles <= 75).sort((a, b) => a.miles - b.miles) : [];
     PLACES = new Map();
     if (HOME) {
         const keys = [...new Set((evRes.data || []).map((e) => String(e.city || '').toLowerCase().replace(/\s+/g, ' ').trim()).filter((k) => k && k !== 'tba'))];
@@ -181,8 +187,17 @@ export async function mountSeason(root) {
     // Cost per trip (this fencer's own days at that tournament), then intentions.
     const marks = Object.fromEntries((marksRes?.data || []).map((m) => [m.category, m]));
     const standing = Object.fromEntries((standRes?.data || []).map((s) => [s.category, s]));
-    const registered = new Set(mine.map((m) => Number(m.ft_event_id)).filter(Boolean));
-    const ctx = { profile, sibling, siblingGoals, goals, ts90: ts[90], primary: goals.focus_category || primaryCategory(profile.birth_year), watches, latestPrice, events, sycKeep: new Set(), marks, standing, registered };
+    // What the family has decided: going, or on the shortlist. Matched by our
+    // own row id first (national events have no FencingTracker id yet), then by
+    // FencingTracker id.
+    const statusOf = new Map();
+    for (const m of mine) {
+        if (m.season_event_id) statusOf.set('s:' + m.season_event_id, m.status || 'going');
+        if (m.ft_event_id) statusOf.set('f:' + Number(m.ft_event_id), m.status || 'going');
+    }
+    const decision = (e) => statusOf.get('s:' + e.id) || statusOf.get('f:' + Number(e.ft_event_id)) || null;
+    const registered = new Set(events.filter((e) => decision(e) === 'going').map((e) => Number(e.ft_event_id)).filter(Boolean));
+    const ctx = { profile, sibling, siblingGoals, goals, ts90: ts[90], primary: goals.focus_category || primaryCategory(profile.birth_year), watches, latestPrice, events, sycKeep: new Set(), marks, standing, registered, decision };
     for (const e of events) e.cost = tripCost(e, ctx);
     // One SYC counts per youth category: keep the best and one backup as
     // value; the rest are insurance at best. The family's rule narrows the
@@ -204,6 +219,8 @@ export async function mountSeason(root) {
     body.appendChild(primerCard(goals));
     const planCats = [ctx.primary, ...(goals.secondary || [])].filter((c, i, a) => c && a.indexOf(c) === i && events.some((e) => e.category === c));
     for (const cat of planCats) body.appendChild(pointsPlanCard(profile, cat, events.filter((e) => e.category === cat), ctx));
+    body.appendChild(rankedCalendar(events, ctx, true));
+    body.appendChild(rankedCalendar(events, ctx, false));
     for (const [key, title, sub] of GROUPS) {
         const rows = events.filter((e) => e.group === key);
         if (!rows.length) continue;
@@ -262,7 +279,8 @@ function verdict(e, ctx) {
     const travel = e.travel === 'fly' ? 'a flight' : e.travel === 'drive' ? 'a drive' : e.travel === 'local' ? 'a day trip' : 'travel';
     const g = e.group;
     if (p.pending) return { word: 'Reading', tone: INK_MUTE, why: 'The field has not been read yet.' };
-    if (g === 'registered') return { word: 'Entered', tone: GOOD, why: `Already signed up. On today's field he would start ${ordinal(p.seed_form)} of ${p.field_n}, likely ${ordinal(Math.round(p.median || p.exp))}, about ${Math.round(pts)} points${add != null ? `, ${Math.round(add)} of them new to his total` : ''}.` };
+    if (g === 'registered') return { word: 'Going', tone: GOOD, why: `On today's field he would start ${ordinal(p.seed_form)} of ${p.field_n}, likely ${ordinal(Math.round(p.median || p.exp))}, about ${Math.round(pts)} points${add != null ? `, ${Math.round(add)} of them new to his total` : ''}.` };
+    if (g === 'considering') return { word: 'Considering', tone: INK, why: `If you go: he would start ${ordinal(p.seed_form)} of ${p.field_n}, likely ${ordinal(Math.round(p.median || p.exp))}, about ${Math.round(pts)} points${add != null ? `, ${Math.round(add)} of them new to his total` : ''}, for ${money(cost.per_person ?? cost.total)} per person.` };
     if (g === 'anchor') return { word: 'Family trip', tone: GOOD, why: `A national event that fills one of his counted slots: about ${Math.round(pts)} points${add != null && add < pts - 1 ? `, of which ${Math.round(add)} actually raise his total` : ''}.` };
     if (g === 'value') return { word: 'Go', tone: GOOD, why: add != null && add > 0 ? `Adds about ${Math.round(add)} points to his ranking total for ${money(cost)} and ${travel}.` : `About ${Math.round(pts)} points on the day for ${money(cost)} and ${travel}.` };
     if (g === 'confidence') return { word: 'Go if it suits', tone: INK, why: `No national points here. He would start ${ordinal(p.seed_form)} of ${p.field_n}: a weekend of winning, which is worth something on its own.` };
@@ -298,7 +316,9 @@ function sycAllowed(e, ctx) {
 
 function classify(e, ctx) {
     const p = e.projections[ctx.profile.name] || {};
-    if (ctx.registered?.has(Number(e.ft_event_id))) return 'registered';
+    const d = ctx.decision ? ctx.decision(e) : null;
+    if (d === 'going') return 'registered';
+    if (d === 'considering') return 'considering';
     if (p.pending) return 'anchor';
     if (e.tier === 'syc' && !sycAllowed(e, ctx)) return 'skip';
     const pts = p.points_exp || 0;
@@ -468,6 +488,48 @@ function pointsPlanCard(profile, cat, rows, ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// The calendar, national and regional, best points per dollar first. Cost is
+// per person so a parent multiplies by however many are going.
+// ---------------------------------------------------------------------------
+function rankedCalendar(events, ctx, national) {
+    const name = ctx.profile.name;
+    const rows = events.filter((e) => NATIONAL.has(e.tier) === national && e.projections[name]?.points_exp != null && e.category !== 'junior' || (national && NATIONAL.has(e.tier) && e.projections[name]?.points_exp != null && e.category === 'junior'))
+        .map((e) => { const pts = e.projections[name].points_exp || 0; const pp = e.cost?.per_person || 0; return { e, pts, pp, ppd: pp > 0 ? pts / pp * 100 : 0 }; })
+        .sort((a, b) => b.ppd - a.ppd);
+    const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
+    wrap.appendChild(label(`${national ? 'National' : 'Regional'} calendar · ${rows.length} events`));
+    wrap.appendChild(serif(national ? 'NACs, JO, SJCC, Nationals by points per dollar' : 'SYCs, RJCCs, RYCs by points per dollar', '22px'));
+    wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '4px 0 8px', lineHeight: '1.5' } }, ['Cost is per person: a return fare, half a hotel room per night, the entry, half the driving. Multiply by who is going.']));
+    const grid = el('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 64px 64px 60px', columnGap: '10px', rowGap: '6px', alignItems: 'baseline', marginTop: '4px' } });
+    const head = (t, right) => el('span', { class: 'label', style: { color: INK_MUTE, textAlign: right ? 'right' : 'left' } }, [t]);
+    grid.appendChild(head('Event')); grid.appendChild(head('Points', true)); grid.appendChild(head('Per person', true)); grid.appendChild(head('Pts/$100', true));
+    const render = (n) => {
+        [...grid.querySelectorAll('[data-row]')].forEach((x) => x.remove());
+        rows.slice(0, n).forEach(({ e, pts, pp, ppd }) => {
+            const v = verdict(e, ctx);
+            const cells = [
+                el('div', { 'data-row': '1', style: { minWidth: 0 } }, [
+                    el('div', { style: { color: INK, fontSize: '14px', fontWeight: e.group === 'registered' ? '700' : '500', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, [e.tournament]),
+                    el('div', { class: 'label', style: { color: INK_MUTE } }, [`${catLabel(e.category)} · ${fmtDay(e.start_date)} · ${e.travel || ''} · `, el('span', { style: { color: v.tone, fontWeight: '700' } }, [v.word])])
+                ]),
+                el('span', { 'data-row': '1', class: 'num', style: { color: pts >= 25 ? GOOD : INK, textAlign: 'right' } }, [pts.toFixed(0)]),
+                el('span', { 'data-row': '1', class: 'num', style: { color: INK, textAlign: 'right' } }, [pp > 0 ? money(pp) : '—']),
+                el('span', { 'data-row': '1', class: 'num', style: { color: ppd >= 5 ? GOOD : INK, textAlign: 'right', fontWeight: '700' } }, [pp > 0 ? ppd.toFixed(1) : '—'])
+            ];
+            cells.forEach((c) => grid.appendChild(c));
+        });
+    };
+    render(10);
+    wrap.appendChild(grid);
+    if (rows.length > 10) {
+        const btn = el('button', { class: 'btn btn-ghost btn-sm btn-mono-label', style: { marginTop: '8px' } }, [`All ${rows.length}`]);
+        btn.onclick = () => { render(rows.length); btn.remove(); };
+        wrap.appendChild(btn);
+    }
+    return wrap;
+}
+
+// ---------------------------------------------------------------------------
 // One intention group, its events inside.
 // ---------------------------------------------------------------------------
 function groupCard(key, title, sub, rows, ctx, refreshed) {
@@ -519,20 +581,26 @@ function eventRow(e, i, ctx, refreshed, group) {
         row.appendChild(el('p', { style: { color: WARN, fontSize: '13px', margin: '2px 0 0' } }, ['Field not read yet.']));
     } else {
         const add = marginalPoints(e, ctx);
+        const decided = group === 'registered' || group === 'considering';
         const stats = [
             stat('Fencers', `${e.entrants ?? p.field_n ?? '—'}`),
             stat("He'd start", ordinal(p.seed_form) + (p.seed_official && p.seed_official !== p.seed_form ? ` (${ordinal(p.seed_official)})` : ''), p.seed_form <= 8 ? GOOD : INK),
             ...(p.seed_pool ? [stat('By pools', ordinal(p.seed_pool), p.seed_pool > p.seed_form + 4 ? WARN : INK)] : []),
             stat('Likely finish', ordinal(Math.round(p.median || p.exp)), finishColor),
-            ...(e.tier === 'syc' && p.p4 != null ? [stat('Podium', pct(p.p4), p.p4 >= 0.3 ? GOOD : INK)] : []),
+            ...(decided && p.p64 != null && p.field_n > 64 ? [stat('Top 64', pct(p.p64))] : []),
+            ...(decided && p.p32 != null && p.field_n > 32 ? [stat('Top 32', pct(p.p32))] : []),
+            ...(decided && p.p16 != null ? [stat('Top 16', pct(p.p16))] : []),
             stat('Top 8', pct(p.p8), p.p8 >= 0.6 ? GOOD : INK),
+            ...((decided || e.tier === 'syc') && p.p4 != null ? [stat('Top 4', pct(p.p4), p.p4 >= 0.3 ? GOOD : INK)] : []),
             stat('Points on the day', p.points_exp == null ? '—' : pts.toFixed(0), pts >= 25 ? GOOD : INK),
             ...(add != null ? [stat('Adds to ranking', add.toFixed(0), add >= 20 ? GOOD : add === 0 ? BAD : INK)] : [])
         ];
         if (group === 'addon' && cost.marginal != null) stats.push(stat('His cost', money(cost.marginal), GOOD));
-        else stats.push(stat('Cost', cost.total > 0 ? money(cost.total) : '—', cost.live ? GOOD : INK));
-        if (group === 'value' || group === 'anchor') stats.push(stat('Points per $100', ppd == null ? '—' : ppd.toFixed(1), ppd >= 5 ? GOOD : INK));
+        else stats.push(stat('Per person', cost.per_person > 0 ? money(cost.per_person) : '—', cost.live ? GOOD : INK));
+        if (group === 'value' || group === 'anchor' || decided) stats.push(stat('Points per $100', ppd == null ? '—' : ppd.toFixed(1), ppd >= 5 ? GOOD : INK));
         row.appendChild(el('div', { style: { display: 'flex', gap: '14px', flexWrap: 'wrap', marginTop: '2px' } }, stats));
+        // The registered field, strongest first, with his chance in one bout.
+        if (decided && p.field_list?.length) row.appendChild(fieldList(p, ctx));
     }
     const note = [];
     if (group === 'addon' && ctx.sibling) note.push(`${ctx.sibling.name} is going. ${e.travel === 'fly' ? `Add his fare, about ${money(cost.flight_pp * 2)} return,` : 'No extra travel,'} plus the entry.`);
@@ -573,6 +641,41 @@ function eventRow(e, i, ctx, refreshed, group) {
         row.appendChild(rb);
     }
     return row;
+}
+
+// The registered fencers, strongest first, and his chance in a bout against
+// each on his form. Folded past the first twelve.
+function fieldList(p, ctx) {
+    const wrap = el('div', { style: { marginTop: '8px' } });
+    wrap.appendChild(label(`Registered fencers · strongest first · his chance in a bout`, INK_MUTE));
+    const rows = p.field_list;
+    const list = el('div', { style: { display: 'grid', gridTemplateColumns: '1fr', gap: '3px', marginTop: '4px' } });
+    const render = (n) => {
+        list.innerHTML = '';
+        rows.slice(0, n).forEach((f, i) => {
+            const col = f.p_beat >= 0.6 ? GOOD : f.p_beat <= 0.35 ? BAD : INK;
+            list.appendChild(el('div', { style: { display: 'grid', gridTemplateColumns: '28px 1fr 56px 52px', gap: '8px', alignItems: 'baseline' } }, [
+                el('span', { class: 'label', style: { color: INK_MUTE } }, [String(i + 1)]),
+                el('span', { style: { color: INK, fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, [
+                    el('a', { href: `https://fencingtracker.com/p/${f.tracker_id}/x`, target: '_blank', rel: 'noopener', style: { color: INK, textDecoration: 'none', fontWeight: f.tag === 'rising' ? '700' : '500' } }, [f.name]),
+                    f.tag !== 'steady' ? el('span', { class: 'label', style: { color: f.tag === 'rising' ? WARN : GOOD, marginLeft: '6px' } }, [f.tag]) : null
+                ].filter(Boolean)),
+                el('span', { class: 'num', style: { color: INK, fontSize: '13px', textAlign: 'right' } }, [String(f.strength)]),
+                el('span', { class: 'num', style: { color: col, fontSize: '13px', fontWeight: '700', textAlign: 'right' } }, [pct(f.p_beat)])
+            ]));
+        });
+    };
+    render(12);
+    wrap.appendChild(list);
+    if (rows.length > 12) {
+        const btn = el('button', { class: 'btn btn-ghost btn-sm btn-mono-label', style: { marginTop: '6px' } }, [`All ${rows.length}`]);
+        btn.onclick = () => { render(rows.length); btn.remove(); };
+        wrap.appendChild(btn);
+    }
+    wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '6px 0 0', lineHeight: '1.5' } }, [
+        'Chance is one 15-touch bout on his current form against theirs, with their last 90 days counted. Rising means their strength moved up 40 or more in three months.'
+    ]));
+    return wrap;
 }
 
 // ---------------------------------------------------------------------------
@@ -776,7 +879,8 @@ function howToRead(profile, sibling) {
             el('b', {}, ['Seed']), ' is his place in that field on form strength, official seed in brackets; ', el('b', {}, ['by pools']), ' is where his pool strength would draw him. ',
             el('b', {}, ['Expected']), ' is the median finish of a simulated bracket. ',
             el('b', {}, ['Points']), ' are national points for that finish under the 2026-27 tables, weighted by how likely each finish is. ',
-            el('b', {}, ['Trip']), ` is fare for two, hotel nights and entries from ${HOME?.city || 'home'}; a live fare from the Travel screen replaces the estimate. `,
+            el('b', {}, ['Per person']), ` is a return fare, half a hotel room per night, the entry and half the driving from ${HOME?.city || 'home'}; multiply by who is going. A live fare from the Travel screen replaces the estimate. `,
+            AIRPORTS.length ? `Airports within 75 minutes of home: ${AIRPORTS.map((a) => `${a.code} ${a.miles} mi`).join(', ')}. ` : '',
             sibling ? `Where ${sibling.name} is going anyway, ${profile.name}'s cost is shown as his fare and entry only. ` : '',
             'Cadet regionals count toward national points this season. Youth RYCs do not; only SYCs and NACs do, and only one SYC counts.'
         ])
@@ -867,6 +971,8 @@ function tripCost(e, ctx) {
     }
     // If the brother is going anyway, this fencer adds a fare (if flying) and his entry.
     c.marginal = (c.travel === 'fly' ? c.flight_pp * 2 : 0) + (c.entries || 60);
+    // Per person: a return fare, half a room per night, the entry, half the driving.
+    c.per_person = (c.travel === 'fly' ? c.flight_pp * 2 : 0) + (c.nights || 0) * (c.hotel_night || 0) / 2 + (c.entries || 60) + (c.drive || 0) / 2;
     return c;
 }
 

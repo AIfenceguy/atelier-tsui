@@ -179,9 +179,12 @@ export function forecast({ entrants, snapshots, myStrength, myOfficial, myPool, 
         points_if_top8: pointsFor(category, tier, 8, n), points_if_top16: pointsFor(category, tier, 16, n),
         trend, live: true,
         // the ten nearest seeds above him, for a by-hand read of their recent bouts
-        neighbours: tagged.sort((a, b) => b.strength - a.strength)
+        neighbours: tagged.slice().sort((a, b) => b.strength - a.strength)
             .filter((x) => x.strength >= myStrength - 80).slice(-10).reverse()
-            .map((x) => ({ name: x.name, tracker_id: x.tracker_id, strength: Math.round(x.strength), tag: x.tag, form: formLine(x.snap), pool: poolOf(x) }))
+            .map((x) => ({ name: x.name, tracker_id: x.tracker_id, strength: Math.round(x.strength), tag: x.tag, form: formLine(x.snap), pool: poolOf(x) })),
+        // the whole registered field, strongest first, with his chance in one bout
+        field_list: tagged.slice().sort((a, b) => b.strength - a.strength)
+            .map((x) => ({ name: x.name, tracker_id: x.tracker_id, strength: Math.round(x.strength), tag: x.tag, form: formLine(x.snap), p_beat: +pwin(myStrength, x.strength).toFixed(2) }))
     };
 }
 
