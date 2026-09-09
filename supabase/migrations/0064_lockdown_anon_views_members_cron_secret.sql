@@ -53,13 +53,15 @@ select cron.alter_job(jobid, command := $cmd$
   select net.http_post(
     url := 'https://kyfkiigbiwhczrtnlivc.supabase.co/functions/v1/refresh-due',
     headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', (select value from app_secrets where name = 'cron_secret')),
-    body := '{}'::jsonb)
+    body := '{}'::jsonb,
+    timeout_milliseconds := 120000)
 $cmd$) from cron.job where jobname = 'en-garde-refresh-due';
 select cron.alter_job(jobid, command := $cmd$
   select net.http_post(
     url := 'https://kyfkiigbiwhczrtnlivc.supabase.co/functions/v1/refresh-local',
     headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', (select value from app_secrets where name = 'cron_secret')),
-    body := '{}'::jsonb)
+    body := '{}'::jsonb,
+    timeout_milliseconds := 120000)
 $cmd$) from cron.job where jobname = 'en-garde-refresh-local';
 
 -- 7. The geocode cache is for venues; a home should never sit in it.
