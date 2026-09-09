@@ -25,8 +25,10 @@ body[data-parent='0'] .bottom-nav a[data-route='settings'],
 body[data-see-season='0'] .bottom-nav a[data-route='season'],
 body[data-see-travel='0'] .bottom-nav a[data-route='travel'] { display: none !important; }
 /* Parent: Travel up front, Train folded away. Fencer: the reverse. */
-body[data-active-role='parent'] .bottom-nav:not(.is-expanded) a[data-route='train'] { display: none; }
-body:not([data-active-role='parent']) .bottom-nav:not(.is-expanded) a[data-route='travel'] { display: none; }
+/* Keyed on the login, not the profile being viewed: a parent looking at a
+   boy's season still has Travel one tap away. */
+body[data-parent='1'] .bottom-nav:not(.is-expanded) a[data-route='train'] { display: none; }
+body[data-parent='0'] .bottom-nav:not(.is-expanded) a[data-route='travel'] { display: none; }
 
 /* Expanded: two rows, six across, all tabs. */
 .bottom-nav.is-expanded {

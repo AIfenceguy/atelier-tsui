@@ -83,7 +83,7 @@ export async function mountInsight(root) {
         supa.from('event_goals').select('*').eq('profile_id', profile.id),
         supa.from('pathway_rules').select('*').order('sort_order'),
         supa.from('pathway_cases').select('*').order('birth_year'),
-        supa.from('opponent_profiles').select('tracker_id,name,club,birth_year,rating,strength_de,strength_pool,tracker_url'),
+        supa.from('opponent_profiles').select('tracker_id,name,club,birth_year,rating,strength_de,strength_pool,tracker_url,fetched_at'),
         supa.from('opponent_windows').select('*'),
         supa.from('opponent_flags').select('tracker_id,flags,days_since_last'),
         supa.from('coach_notes').select('response_text,created_at,input_summary').eq('profile_id', profile.id).eq('kind', 'opponent-tier').order('created_at', { ascending: false })
@@ -374,6 +374,32 @@ async function tierBlock(e, profile, goal, oppById, winsById, flagsById, cachedB
                 })));
         }
         wrap.appendChild(row);
+    }
+
+    // Their records go stale the moment they fence again. One tap re-reads
+    // each fencer in this tier from FencingTracker (on demand, one fencer at
+    // a time, cached three days) and the windows and flags recompute.
+    {
+        const ages = tier.map((t) => oppById.get(t.tracker_id)?.fetched_at).filter(Boolean).map((d) => Date.now() - new Date(d).getTime());
+        const oldest = ages.length ? Math.round(Math.max(...ages) / 864e5) : null;
+        const rb = el('button', { class: 'btn btn-ghost btn-mono-label', style: { marginTop: '10px', width: '100%' } }, [
+            oldest == null ? 'Read their records from FencingTracker' : `Re-read their records · oldest copy ${oldest} day${oldest === 1 ? '' : 's'} old`
+        ]);
+        rb.onclick = async () => {
+            rb.disabled = true;
+            let done = 0, failed = 0;
+            for (const t of tier) {
+                rb.textContent = `Reading ${done + 1} of ${tier.length}…`;
+                try {
+                    const { data, error } = await supa.functions.invoke('refresh-peer', { body: { tracker_id: Number(t.tracker_id), force: true } });
+                    if (error || data?.error) failed += 1;
+                } catch (_) { failed += 1; }
+                done += 1;
+            }
+            if (failed) toast(`${failed} of ${tier.length} could not be read`, 'error');
+            location.reload();
+        };
+        wrap.appendChild(rb);
     }
 
     // The brief: one AI read of the whole tier, cached per event.

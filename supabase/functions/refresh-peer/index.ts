@@ -1,7 +1,13 @@
 // refresh-peer — read one fencer's public FencingTracker record: profile
 // (club, rating, birth year, last twelve months of results), registrations,
-// and current DE / pool strength. On demand, three pages, cached three days.
+// and current DE / pool strength. On demand, two pages, cached three days.
 // Same manners as refresh-event: identified, slow, never across the site.
+//
+// Two homes for the answer: peer_snapshot (the Season screen's "fencers to
+// watch") and the opponent_profiles / opponent_results pair that the Insight
+// screen's windows and flags are computed from. Both are written on every
+// read, so a fencer is never "66 days since last event" a week after he
+// fenced the boys.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -18,6 +24,21 @@ async function page(url: string): Promise<string> {
   return await r.text();
 }
 
+// Event title -> the category key the strength bands and windows use.
+const CATS: [RegExp, string][] = [
+  [/\by-?8\b/, "y8"], [/\by-?10\b/, "y10"], [/\by-?12\b/, "y12"], [/\by-?14\b/, "y14"],
+  [/cadet/, "cadet"], [/junior/, "junior"],
+  [/div(?:ision)?\s*iii\b|div(?:ision)?\s*3\b/, "div3"], [/div(?:ision)?\s*ii\b|div(?:ision)?\s*2\b/, "div2"],
+  [/div(?:ision)?\s*ia?\b|div(?:ision)?\s*1a?\b/, "div1"], [/veteran|\bvet\b/, "vet"], [/senior|\bopen\b/, "senior"],
+];
+function catOf(title: string): string {
+  const t = String(title || "").toLowerCase();
+  for (const [re, v] of CATS) if (re.test(t)) return v;
+  return t.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "other";
+}
+
+type Result = { d: string; tournament: string; event: string; place: number; field: number; earned?: string | null; cls?: string | null; category?: string };
+
 function parseProfile(html: string, today: Date) {
   const name = clean((html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/) || [, ""])[1]).replace(/\s*Verified\s*$/i, "");
   const by = html.match(/person-hero__birth-year">(\d{4})</);
@@ -25,34 +46,18 @@ function parseProfile(html: string, today: Date) {
   // Rating rows carry a search attribute like 'ratingFoil B26 Mar 18, 2026'.
   const rm = html.match(/data-ranking-search="rating(?:Foil|Épée|Epee|Saber|Sabre)\s+([A-EU]\d{0,2})/);
   const rating = rm ? rm[1] : null;
-  const re = /<tr data-ranking-search="[^"]*">\s*<td class="ranking-table__numeric" data-ranking-value="(\d{8})">[^<]*<\/td>\s*<td>([^<]*)<\/td>\s*<td class="person-summary__event-cell">\s*<a href="\/event\/\d+\/results" title="([^"]*)">[^<]*<\/a>\s*<\/td>\s*<td class="ranking-table__numeric" data-ranking-value="\d+">\s*(\d+)\s*\/\s*(\d+)\s*<\/td>/g;
+  // Results rows: date, tournament, event, place/field, then (when present)
+  // the rating earned and the event class, as the old scraper read them.
+  const re = /<tr data-ranking-search="[^"]*">\s*<td class="ranking-table__numeric" data-ranking-value="(\d{8})">[^<]*<\/td>\s*<td>([^<]*)<\/td>\s*<td class="person-summary__event-cell">\s*<a href="\/event\/\d+\/results" title="([^"]*)">[^<]*<\/a>\s*<\/td>\s*<td class="ranking-table__numeric" data-ranking-value="\d+">\s*(\d+)\s*\/\s*(\d+)\s*<\/td>(?:\s*<td data-ranking-text="([^"]*)">[^<]*<\/td>\s*<td data-ranking-text="([^"]*)">)?/g;
   const cut = new Date(today.getTime() - 365 * 864e5).toISOString().slice(0, 10);
-  const results: { d: string; tournament: string; event: string; place: number; field: number }[] = [];
+  const results: Result[] = [];
   for (const m of html.matchAll(re)) {
     const d = `${m[1].slice(0, 4)}-${m[1].slice(4, 6)}-${m[1].slice(6)}`;
     if (d < cut) continue;
-    results.push({ d, tournament: clean(m[2]).slice(0, 60), event: clean(m[3]).slice(0, 40), place: Number(m[4]), field: Number(m[5]) });
+    const event = clean(m[3]).slice(0, 40);
+    results.push({ d, tournament: clean(m[2]).slice(0, 60), event, place: Number(m[4]), field: Number(m[5]), earned: m[6] ? clean(m[6]) || null : null, cls: m[7] ? clean(m[7]) || null : null, category: catOf(event) });
   }
   return { name, birth_year: by ? Number(by[1]) : null, club: club ? clean(club[1]) : null, rating, results: results.slice(0, 60) };
-}
-
-// Registrations page: rows of date, tournament, event.
-function parseRegistrations(html: string) {
-  const out: { d: string; tournament: string; event: string }[] = [];
-  for (const m of html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)) {
-    const row = m[1];
-    const iso = row.match(/\b(20\d\d-\d\d-\d\d)\b/);
-    const t = row.match(/href="\/tournament\/\d+[^"]*"[^>]*>([\s\S]*?)<\/a>/);
-    const e = row.match(/href="\/event\/\d+[^"]*"[^>]*>([\s\S]*?)<\/a>/);
-    if (!t || !e) continue;
-    let d = iso ? iso[1] : null;
-    if (!d) {
-      const md = clean(row).match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})\b/);
-      if (md) { const y = new Date().getFullYear(); const dt = new Date(`${md[1]} ${md[2]}, ${y} UTC`); if (!isNaN(dt.getTime())) d = dt.toISOString().slice(0, 10); }
-    }
-    out.push({ d: d || "", tournament: clean(t[1]).slice(0, 60), event: clean(e[1]).slice(0, 40) });
-  }
-  return out.slice(0, 40);
 }
 
 function parseStrength(html: string) {
@@ -62,14 +67,47 @@ function parseStrength(html: string) {
   return { strength_de: last(m[2]), strength_pool: last(m[1]) };
 }
 
+// Keep the Insight tables in step with what was read.
+// deno-lint-ignore no-explicit-any
+async function syncOpponent(db: any, tid: number, row: any) {
+  try {
+    await db.from("opponent_profiles").upsert({
+      tracker_id: tid, name: row.name || null, club: row.club || null, birth_year: row.birth_year || null, rating: row.rating || null,
+      strength_de: row.strength_de ?? null, strength_pool: row.strength_pool ?? null,
+      tracker_url: `https://fencingtracker.com/p/${tid}/x`, fetched_at: row.fetched_at || new Date().toISOString(),
+    });
+    const res: Result[] = Array.isArray(row.results) ? row.results : [];
+    if (res.length) {
+      const oldest = res.reduce((m, r) => (r.d < m ? r.d : m), res[0].d);
+      await db.from("opponent_results").delete().eq("tracker_id", tid).gte("result_date", oldest);
+      const rows = res.map((r) => ({
+        tracker_id: tid, result_date: r.d, tournament: r.tournament, category: r.category || catOf(r.event), event_title: r.event,
+        place: r.place, field_size: r.field, event_class: r.cls || null, rating_earned: r.earned || null,
+      }));
+      await db.from("opponent_results").upsert(rows, { onConflict: "tracker_id,result_date,tournament,category", ignoreDuplicates: true });
+    }
+  } catch (e) { console.warn("opponent sync failed", e); }
+}
+
 Deno.serve(async (req) => {
   const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, content-type, apikey" };
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
+  // A signed-in member, the service key, or a server-side job carrying the
+  // cron secret from app_secrets.
   const auth = req.headers.get("Authorization") || "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  if (auth !== `Bearer ${serviceKey}`) {
+  const db = createClient(Deno.env.get("SUPABASE_URL")!, serviceKey);
+  let allowed = auth === `Bearer ${serviceKey}`;
+  if (!allowed) {
+    const given = req.headers.get("x-cron-secret") || "";
+    if (given) {
+      const { data: s } = await db.from("app_secrets").select("value").eq("name", "cron_secret").maybeSingle();
+      allowed = Boolean(s?.value) && given === s.value;
+    }
+  }
+  if (!allowed) {
     const anon = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: auth } } });
     const { data: who } = await anon.auth.getUser();
     if (!who?.user) return json({ error: "sign in first" }, 401);
@@ -78,10 +116,12 @@ Deno.serve(async (req) => {
   const tid = Number(body.tracker_id);
   if (!tid) return json({ error: "tracker_id required" }, 400);
 
-  const db = createClient(Deno.env.get("SUPABASE_URL")!, serviceKey);
   const now = new Date();
   const { data: prev } = await db.from("peer_snapshot").select("*").eq("tracker_id", tid).maybeSingle();
-  if (!body.force && prev?.fetched_at && now.getTime() - new Date(prev.fetched_at).getTime() < FRESH_HOURS * 3600e3) return json({ cached: true, ...prev });
+  if (!body.force && prev?.fetched_at && now.getTime() - new Date(prev.fetched_at).getTime() < FRESH_HOURS * 3600e3) {
+    await syncOpponent(db, tid, prev);
+    return json({ cached: true, ...prev });
+  }
 
   try {
     const ph = await page(`https://fencingtracker.com/p/${tid}/x`);
@@ -102,6 +142,7 @@ Deno.serve(async (req) => {
     const row = { tracker_id: tid, name: prof.name, club: prof.club, rating: prof.rating, birth_year: prof.birth_year, ...strength, registrations, results: prof.results, fetched_at: now.toISOString() };
     const up = await db.from("peer_snapshot").upsert(row);
     if (up.error) return json({ error: up.error.message }, 500);
+    await syncOpponent(db, tid, row);
     return json({ cached: false, ...row });
   } catch (err) {
     return json({ error: String((err as Error).message || err) }, 502);

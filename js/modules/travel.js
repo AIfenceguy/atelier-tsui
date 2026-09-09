@@ -91,10 +91,6 @@ export async function mountTravel(root) {
         root.appendChild(el('div', { class: 'empty' }, ['Travel is on the parent\'s account.']));
         return;
     }
-    if (profile && profile.role !== 'parent') {
-        root.appendChild(el('div', { class: 'empty' }, ['Switch to the Parent profile to plan travel.']));
-        return;
-    }
 
     const [{ data, error }, tripsRes] = await Promise.all([
         supa.from('flight_watches')
