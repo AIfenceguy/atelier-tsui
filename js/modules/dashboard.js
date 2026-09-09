@@ -27,6 +27,16 @@ export async function mountDashboard(root) {
         return;
     }
 
+    // The Parent profile is not a fencer: no tip, week or training log of its
+    // own. Its page is the household view - each fencer's one thing and week,
+    // then both fencers' stats - and nothing that only makes sense for a boy.
+    const parentView = profile.role === 'parent' || profile.kind === 'parent';
+    let fencers = [profile];
+    if (parentView) {
+        try { fencers = (await listAllProfiles()).filter((p) => p.kind === 'fencer' || p.role === 'raedyn' || p.role === 'kaylan'); }
+        catch (e) { console.warn('fencers skipped', e); fencers = []; }
+    }
+
     const date = todayISO();
     const [nextT, phys, ment, recentBouts, opps] = await Promise.all([
         nextTournament(),
@@ -54,34 +64,37 @@ export async function mountDashboard(root) {
     if (activeStreak > 0) heroBitsWithStreak.unshift(el('span', { class: 'hero-streak' }, [String(activeStreak), '-day streak']));
 
     root.appendChild(el('div', { class: 'today-hero stagger' }, [
-        el('h1', { class: 'today-greeting' }, [
-            greeting(), ', ',
-            el('span', { class: 'accent' }, [profile.name]),
-            '.'
-        ]),
+        el('h1', { class: 'today-greeting' }, parentView
+            ? [greeting(), '.']
+            : [greeting(), ', ', el('span', { class: 'accent' }, [profile.name]), '.']),
         el('div', { class: 'today-sub' }, heroBitsWithStreak)
     ]));
 
-    // One thing today — the tip a parent acts on, above every number.
-    try {
-        root.appendChild(renderDailyTip(await pickDailyTip(profile)));
-    } catch (e) { console.warn('Daily tip skipped:', e); }
+    // One thing today — the tip a parent acts on, above every number. On the
+    // Parent profile, one per fencer.
+    for (const kid of fencers) {
+        try {
+            root.appendChild(renderDailyTip(await pickDailyTip(kid)));
+        } catch (e) { console.warn('Daily tip skipped:', e); }
+    }
 
     // The week's score: sessions done against the three asks (Bouts, Body, Mind).
-    try {
-        const plans = await loadWeeklyPlan(profile);
-        const { done, target } = weekSummary(plans);
-        const MUTE = '#6B7280';
-        root.appendChild(el('div', { style: { display: 'flex', gap: '14px', alignItems: 'baseline', flexWrap: 'wrap', padding: '0 var(--gut) 14px' } }, [
-            el('span', { class: 'label', style: { color: MUTE } }, ['This week']),
-            el('span', { class: 'num', style: { color: done >= target ? '#1f7a1f' : 'var(--ink)', fontWeight: '700', fontSize: '16px' } }, [`${done} of ${target} sessions`]),
-            ...plans.map((p) => el('a', { href: p.href || '#train', class: 'label', style: { color: (p.checkins || []).length >= p.target_n ? '#1f7a1f' : MUTE, textDecoration: 'none' } }, [
-                `${p.area === 'bout' ? 'Bouts' : p.area === 'body' ? 'Body' : 'Mind'} ${Math.min(p.target_n, (p.checkins || []).length)}/${p.target_n}`
-            ]))
-        ]));
-    } catch (e) { console.warn('Week summary skipped:', e); }
+    for (const kid of fencers) {
+        try {
+            const plans = await loadWeeklyPlan(kid);
+            const { done, target } = weekSummary(plans);
+            const MUTE = '#6B7280';
+            root.appendChild(el('div', { style: { display: 'flex', gap: '14px', alignItems: 'baseline', flexWrap: 'wrap', padding: '0 var(--gut) 14px' } }, [
+                el('span', { class: 'label', style: { color: MUTE } }, [parentView ? `${kid.name} · this week` : 'This week']),
+                el('span', { class: 'num', style: { color: done >= target ? '#1f7a1f' : 'var(--ink)', fontWeight: '700', fontSize: '16px' } }, [`${done} of ${target} sessions`]),
+                ...plans.map((p) => el('a', { href: p.href || '#train', class: 'label', style: { color: (p.checkins || []).length >= p.target_n ? '#1f7a1f' : MUTE, textDecoration: 'none' } }, [
+                    `${p.area === 'bout' ? 'Bouts' : p.area === 'body' ? 'Body' : 'Mind'} ${Math.min(p.target_n, (p.checkins || []).length)}/${p.target_n}`
+                ]))
+            ]));
+        } catch (e) { console.warn('Week summary skipped:', e); }
+    }
 
-    // Status metrics (Body / Mind) — two-column metric grid
+    // Status metrics (Body / Mind) — two-column metric grid, the fencer's own log.
     const bodyMetric = phys
         ? {
             val: `${(phys.drills_completed || []).filter((d) => d.done).length}/${(phys.drills_completed || []).length || '–'}`,
@@ -97,7 +110,7 @@ export async function mountDashboard(root) {
         }
         : { val: '—', foot: 'no log yet' };
 
-    root.appendChild(el('div', { class: 'metric-grid' }, [
+    if (!parentView) root.appendChild(el('div', { class: 'metric-grid' }, [
         metricCell('TODAY · BODY', bodyMetric.val, bodyMetric.foot, '#physical'),
         metricCell('TODAY · MIND', mindMetric.val, mindMetric.foot, '#mental')
     ]));
@@ -116,6 +129,9 @@ export async function mountDashboard(root) {
     } catch (e) {
         console.warn('Level dashboard skipped:', e);
     }
+
+    // Everything below is a fencer's own journal; the Parent profile has none.
+    if (parentView) return;
 
     // AI Coach training tips — generated from bouts + lessons
     try {

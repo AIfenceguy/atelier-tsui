@@ -34,8 +34,9 @@ select p.tracker_id, p.name, w365.category,
     case when w365.days_since_last >= 120 and anyl.days_since_last < 60 then 'not here lately:' || w365.days_since_last || ' days since his last event in this category' end,
     case when w365.median_pct_big is not null and w365.median_pct_small is not null and (w365.median_pct_big - w365.median_pct_small) >= 15
          then 'fades in deep fields:median ' || w365.median_pct_small || '% in small fields vs ' || w365.median_pct_big || '% in fields of 100+' end,
-    case when w180.trend_pct >= 12 then 'form dropping:median finish worsened ' || w180.trend_pct || ' points over six months' end,
-    case when w180.trend_pct <= -12 then 'form rising:median finish improved ' || abs(w180.trend_pct) || ' points over six months' end,
+    -- A trend needs at least four events in the half year, two each side.
+    case when w180.events >= 4 and w180.trend_pct >= 12 then 'form dropping:median finish worsened ' || w180.trend_pct || ' points over six months' end,
+    case when w180.events >= 4 and w180.trend_pct <= -12 then 'form rising:median finish improved ' || abs(w180.trend_pct) || ' points over six months' end,
     case when w365.events >= 5 and (w365.worst_pct - w365.best_pct) >= 60 then 'erratic:finishes span ' || w365.best_pct || '% to ' || w365.worst_pct || '% in this category' end,
     case when w90.events >= 4 then 'heavy schedule:' || w90.events || ' events here in 90 days' end,
     case when w365.events between 1 and 2 then 'thin record:only ' || w365.events || ' event' || case when w365.events > 1 then 's' else '' end || ' here in a year' end
