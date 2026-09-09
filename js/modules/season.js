@@ -246,7 +246,7 @@ export async function mountSeason(root) {
     body.appendChild(goalsCard(profile, goals, sibling));
     body.appendChild(primerCard(goals));
     const planCats = [ctx.primary, ...(goals.secondary || [])].filter((c, i, a) => c && a.indexOf(c) === i && events.some((e) => e.category === c));
-    for (const cat of planCats) body.appendChild(pointsPlanCard(profile, cat, events.filter((e) => e.category === cat), ctx));
+    for (const cat of planCats) body.appendChild(pointsPlanCard(profile, cat, events.filter((e) => cat === 'cadet' ? feeds(e, cat) : e.category === cat), ctx));
     if (COSTS) {
         body.appendChild(rankedCalendar(events, ctx, true));
         body.appendChild(rankedCalendar(events, ctx, false));
@@ -292,14 +292,24 @@ function projectTotal(cat, candidates, name) {
 
 function marginalPoints(e, ctx) {
     const name = ctx.profile.name;
-    const cat = e.category;
-    if (!['y12', 'y14', 'cadet'].includes(cat)) return null;
-    // The pool he is counting on: the events not marked skip in this category,
-    // plus, for Y14, cadet national results.
-    const base = ctx.events.filter((x) => x !== e && x.group !== 'skip' && (x.category === cat || (cat === 'y14' && countsForY14(x))));
-    const without = projectTotal(cat, base, name);
-    const withE = projectTotal(cat, [...base, e], name);
-    return Math.max(0, withE - without);
+    // Every ranking this event feeds: a Junior entry is a Cadet result (and a
+    // Y14 one when national). The event is worth the most it adds anywhere.
+    const targets = e.category === 'y12' ? ['y12']
+        : e.category === 'y14' ? ['y14']
+        : e.category === 'cadet' ? ['cadet', ...(countsForY14(e) ? ['y14'] : [])]
+        : e.category === 'junior' || e.category === 'div1' ? ['cadet', ...(countsForY14(e) ? ['y14'] : [])]
+        : [];
+    if (!targets.length) return null;
+    let best = null;
+    for (const cat of targets) {
+        // The pool he is counting on: the events not marked skip that feed this ranking.
+        const base = ctx.events.filter((x) => x !== e && x.group !== 'skip' && feeds(x, cat));
+        const without = projectTotal(cat, base, name);
+        const withE = projectTotal(cat, [...base, e], name);
+        const add = Math.max(0, withE - without);
+        if (best == null || add > best) best = add;
+    }
+    return best;
 }
 
 // The sentence a parent reads first.
@@ -455,13 +465,13 @@ function pointsPlanCard(profile, cat, rows, ctx) {
         ]));
     } else if (cat === 'cadet') {
         const all = rows.filter((e) => e.group !== 'skip').sort((a, b) => P(b) - P(a)).slice(0, 6);
-        for (const e of all) slots.push({ name: NATIONAL.has(e.tier) ? tierLabel(e.tier) : 'Regional', ev: e });
+        for (const e of all) slots.push({ name: `${e.category === 'cadet' ? '' : catLabel(e.category) + ' '}${NATIONAL.has(e.tier) ? tierLabel(e.tier) : 'regional'}${e.category === 'cadet' ? '' : ', counts for Cadet'}`, ev: e });
         const total = all.reduce((a, e) => a + P(e), 0);
         wrap.appendChild(serif(`${Math.round(total)} points projected`, '26px', total >= 150 ? GOOD : INK));
         wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '2px 0 10px', lineHeight: '1.5' } }, [
-            'Best six results count, and regional Cadet events (RJCC, RCC) count nationally this season: a top 8 is 36.6, top 16 is 31.2, anywhere in the top 64 is 22.2. ',
-            'At a NAC the field splits above 168 entries: the Elite bracket (capped at 112) pays 51.6 for a top 64 and 81 for a top 32; the Challenger bracket pays 31.8 and 39.6. NAC rows below show the Challenger figure with the Elite figure in brackets. ',
-            'USA Fencing has published the threshold and the cap but not the order it fills Elite with for Cadet; for the first events it is drawn from last season\'s national results re-scored on the new tables.'
+            'Best six results in a rolling year count, and his Junior results count here too, at their full Junior value: on the USA Fencing Cadet ranking his 68 is a Junior regional 2nd. ',
+            'Regional Cadet: top 8 is 36.6, top 16 is 31.2, anywhere in the top 64 is 22.2. Regional Junior: top 16 is 41.6, top 32 is 35.2, top 64 is 29.6. ',
+            'At a NAC the field splits above 168 entries: the Elite bracket (capped at 112) pays 51.6 for a top 64 and 81 for a top 32; the Challenger bracket pays 31.8 and 39.6. NAC rows below show the Challenger figure with the Elite figure in brackets.'
         ]));
     }
     // Where he stands today, from the member portal, before any of this.
@@ -473,10 +483,20 @@ function pointsPlanCard(profile, cat, rows, ctx) {
             `Standings as of ${new Date(st.as_of + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}; last season's results roll off as this season's land.`
         ]));
     }
-    // Where the plan's total would sit on the real standings today.
+    // Where the plan's total would sit on the real standings today. Results he
+    // already holds stay in his best six until they age out, so the honest
+    // number is the best six of what he has and what the plan adds.
     const mk = ctx.marks?.[cat];
     if (mk && slots.length) {
-        const total = slots.reduce((a, s) => a + P(s.ev), 0);
+        const keep = cat === 'cadet' ? 6 : 4;
+        const held = (st?.counted || []).map(Number).filter((x) => x > 0);
+        const planned = slots.map((s) => P(s.ev));
+        const combined = [...held, ...planned].sort((a, b) => b - a).slice(0, keep).reduce((a, b) => a + b, 0);
+        const total = held.length ? combined : slots.reduce((a, s) => a + P(s.ev), 0);
+        if (held.length) wrap.appendChild(el('p', { style: { color: INK, fontSize: '13px', margin: '0 0 6px', lineHeight: '1.5' } }, [
+            el('b', {}, [`With what he already holds: about ${Math.round(total)} points`]),
+            ` (best ${keep} of today's ${held.length} counted results and the plan's ${planned.length}).`
+        ]));
         const pts = Object.entries(mk.marks).map(([r, p]) => [Number(r), Number(p)]).sort((a, b) => a[0] - b[0]);
         let where;
         if (total >= pts[0][1]) where = `about rank ${pts[0][0]}`;
@@ -533,16 +553,27 @@ function eligible(cat, profile) {
     if (cat === 'div1') return /^[ABC]/i.test(String(profile.rating || ''));
     return true;
 }
+// Read off Raedyn's own row on the USA Fencing Cadet unified ranking
+// (2026-09-09): every Junior result, regional or national, sits in his Cadet
+// record at its full Junior value, and a Division II NAC result sits there at
+// 0.8 weight. So a Junior entry feeds Junior and Cadet, and Y14 when national.
 function countsToward(e) {
     const nat = NATIONAL.has(e.tier);
     switch (e.category) {
         case 'y12': return ['Y12'];
         case 'y14': return ['Y14'];
         case 'cadet': return nat ? ['Cadet', 'Y14'] : (REGIONAL_CADET_COUNTS_FOR_Y14 ? ['Cadet', 'Y14'] : ['Cadet']);
-        case 'junior': return nat ? ['Junior', 'Y14'] : ['Junior'];
-        case 'div1': return nat ? ['Division I', 'Y14'] : ['Division I'];
+        case 'junior': return nat ? ['Junior', 'Cadet', 'Y14'] : ['Junior', 'Cadet'];
+        case 'div1': return nat ? ['Division I', 'Cadet', 'Y14'] : ['Division I', 'Cadet'];
         default: return [];
     }
+}
+// Does this event feed the ranking for `cat`?
+function feeds(e, cat) {
+    if (e.category === cat) return true;
+    if (cat === 'y14') return countsForY14(e);
+    if (cat === 'cadet') return e.category === 'junior' || e.category === 'div1';
+    return false;
 }
 
 function weekendsCard(key, title, sub, rows, ctx, refreshed) {
