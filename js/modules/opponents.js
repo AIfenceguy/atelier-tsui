@@ -21,7 +21,7 @@ import {
 // screen matches the rest of the site; the data is left as it is.
 const noEmoji = (t) => String(t ?? '').replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, '').replace(/^\s+/, '');
 import { opponentProfiler, listCoachNotes } from '../lib/coach.js';
-import { renderMeetingsCard, recordsByTracker } from '../lib/lost-bouts.js';
+import { renderMeetingsCard, recordsByTracker, autoFillOpponent, linkOpponentsByName } from '../lib/lost-bouts.js';
 
 // Win-loss record against each opponent from the competition results, keyed
 // by tracker id; filled by the list screen before the cards render.
@@ -61,6 +61,9 @@ export async function mountOpponentsList(root) {
     catch (e) {
         return root.appendChild(el('div', { class: 'card', style: { color: 'var(--loss)', margin: '0 var(--gut)' } }, [`Failed to load: ${e.message}`]));
     }
+    // A record typed by name is matched to the results by surname, so the
+    // head-to-head follows it without anyone pasting a tracker link.
+    try { await linkOpponentsByName(profile, opps); } catch (e) { console.warn('name links skipped', e); }
     try { RECORDS = await recordsByTracker(profile, opps.map((o) => o.tracker_id)); }
     catch (e) { console.warn('records skipped', e); RECORDS = new Map(); }
 
@@ -238,6 +241,9 @@ export async function mountOpponentDetail(root, params) {
 
     let opp; try { opp = await getOpponent(params.id); }
     catch (e) { return root.appendChild(el('div', { class: 'card' }, ['Opponent not found.'])); }
+    // Fill what the results know (tracker id, club, rating); never overwrite.
+    try { const filled = await autoFillOpponent(profile, opp); if (filled) Object.assign(opp, filled); }
+    catch (e) { console.warn('auto-fill skipped', e); }
 
     const [swot, cards, bouts, taxos] = await Promise.all([
         getSwot(params.id),

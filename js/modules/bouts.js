@@ -14,7 +14,7 @@ import { loadWeeklyPlan, renderPlanCard } from '../lib/weekly-plan.js';
 import { boutDebrief, listCoachNotes } from '../lib/coach.js';
 import { getWeaknessDrills } from '../lib/weakness-drills.js';
 import { logDrillSession, tagToSlug } from '../lib/drill-mastery.js';
-import { loadLostBouts, renderLostBoutsCard, seedFromResult } from '../lib/lost-bouts.js';
+import { loadLostBouts, renderLostBoutsCard, seedFromResult, recentResultOpponents, factsForName } from '../lib/lost-bouts.js';
 
 const CONTEXT_OPTIONS = [
     { value: 'club_open', label: 'Club open fencing' },
@@ -238,17 +238,43 @@ export async function mountBoutEntry(root, params) {
 
     // SECTION: Opponent
     form.appendChild(sectionLabel('Opponent'));
-    const oppList = el('datalist', { id: 'opp-suggest' }, opponents.map((o) => el('option', { value: o.name }, [])));
+    // Suggest everyone on record and everyone he met at a competition this
+    // year. Rule of the house: a fact the results know is never typed.
+    let resultOpps = [];
+    try { resultOpps = await recentResultOpponents(profile); } catch (e) { console.warn('result opponents skipped', e); }
+    const suggest = new Map();
+    for (const o of opponents) suggest.set(o.name.toLowerCase(), o.name);
+    for (const o of resultOpps) if (!suggest.has(o.name.toLowerCase())) suggest.set(o.name.toLowerCase(), o.name);
+    const oppList = el('datalist', { id: 'opp-suggest' }, [...suggest.values()].sort().map((n) => el('option', { value: n }, [])));
     form.appendChild(oppList);
+    const factLine = el('div', { class: 'label', style: { color: '#6B7280', marginTop: '4px' }, hidden: true });
+    const oppNameInput = el('input', {
+        type: 'text', name: 'opponent_name', class: 'field-input', list: 'opp-suggest',
+        value: editing?.opponent_name || '',
+        placeholder: 'who you fenced',
+        required: true,
+        autocomplete: 'off',
+        onchange: async () => {
+            const name = oppNameInput.value.trim();
+            if (!name) return;
+            try {
+                const f = await factsForName(profile, name, resultOpps);
+                if (!f) return;
+                const rating = form.querySelector('input[name="opponent_rating"]');
+                const club = form.querySelector('input[name="opponent_club"]');
+                const tid = form.querySelector('input[name="opponent_tracker_id"]');
+                if (rating && !rating.value && f.rating) rating.value = f.rating;
+                if (club && !club.value && f.club) club.value = f.club;
+                if (tid && !tid.value && f.tracker_id) tid.value = String(f.tracker_id);
+                factLine.textContent = `From the results: ${f.name}${f.rating ? ` · ${f.rating}` : ''}${f.club ? ` · ${f.club}` : ''}${f.strength_de ? ` · strength ${f.strength_de}` : ''}`;
+                factLine.hidden = false;
+            } catch (e) { console.warn('name lookup failed', e); }
+        }
+    });
     form.appendChild(el('div', { class: 'field' }, [
         el('label', { class: 'field-label' }, ['Name']),
-        el('input', {
-            type: 'text', name: 'opponent_name', class: 'field-input', list: 'opp-suggest',
-            value: editing?.opponent_name || '',
-            placeholder: 'who you fenced',
-            required: true,
-            autocomplete: 'off'
-        })
+        oppNameInput,
+        factLine
     ]));
     form.appendChild(el('div', { class: 'field' }, [
         el('label', { class: 'field-label' }, ['Rating']),

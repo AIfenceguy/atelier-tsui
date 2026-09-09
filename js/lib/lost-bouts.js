@@ -71,6 +71,83 @@ export async function snapshotsFor(tids) {
     return out;
 }
 
+// One fencer's profile read on demand (club, rating, strength), cached three
+// days server-side by refresh-peer. Used only when nothing we hold knows him.
+async function fetchPeer(tid) {
+    try {
+        const { data, error } = await supa.functions.invoke('refresh-peer', { body: { tracker_id: tid } });
+        if (error || !data || data.error) return null;
+        return { tracker_id: tid, name: data.name || null, club: data.club || null, rating: data.rating || null, strength_de: data.strength_de || null, strength_pool: data.strength_pool || null };
+    } catch (e) { console.warn('peer read failed', e); return null; }
+}
+export async function factsFor(tid) {
+    if (!tid) return {};
+    const m = await snapshotsFor([tid]);
+    return m.get(tid) || (await fetchPeer(tid)) || {};
+}
+
+// Everyone the boy has fenced at a competition in the last year, from the
+// results: the names the form suggests, and the ids behind them.
+export async function recentResultOpponents(profile) {
+    const since = new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 10);
+    const { data } = await supa.from('fencer_bouts').select('opponent,opponent_tracker_id,bout_date').eq('profile_id', profile.id).gte('bout_date', since).order('bout_date', { ascending: false });
+    const seen = new Map();
+    for (const r of data || []) if (r.opponent && !seen.has(r.opponent.toLowerCase())) seen.set(r.opponent.toLowerCase(), { name: r.opponent, tracker_id: r.opponent_tracker_id, last: r.bout_date });
+    return [...seen.values()];
+}
+// A typed name must carry the surname (the first token of the tracker's
+// "LAST First"), within two letters, and resolve to exactly one fencer.
+function surnameClose(typed, tracker) {
+    const a = tokens(typed), b = tokens(tracker);
+    if (!a.length || !b.length) return false;
+    const sur = b[0];
+    return a.some((x) => x === sur || (x.length >= 4 && sur.length >= 4 && lev(x, sur) <= 2));
+}
+export function matchResultOpponent(list, name) {
+    const t = tokens(name); if (!t.length) return null;
+    const exact = list.filter((o) => { const b = tokens(o.name); return t.every((x) => b.includes(x)); });
+    const pool = exact.length ? exact : list.filter((o) => surnameClose(name, o.name));
+    const ids = [...new Set(pool.map((o) => o.tracker_id).filter(Boolean))];
+    return ids.length === 1 ? pool.find((o) => o.tracker_id === ids[0]) : null;
+}
+// What the results know about a typed name: the tracker id, rating, club.
+export async function factsForName(profile, name, list) {
+    const hit = matchResultOpponent(list || await recentResultOpponents(profile), name);
+    if (!hit?.tracker_id) return null;
+    const f = await factsFor(hit.tracker_id);
+    return { tracker_id: hit.tracker_id, name: hit.name, rating: f.rating || null, club: f.club || null, strength_de: f.strength_de || null };
+}
+// An opponent record without a tracker id, or without club or rating, gets
+// them from the results. Only empty fields are filled.
+export async function autoFillOpponent(profile, opp) {
+    const patch = {};
+    let tid = opp.tracker_id;
+    if (!tid) {
+        const hit = matchResultOpponent(await recentResultOpponents(profile), opp.name);
+        if (hit?.tracker_id) { tid = hit.tracker_id; patch.tracker_id = tid; }
+    }
+    if (!tid) return null;
+    if (!opp.club || !opp.rating) {
+        const f = await factsFor(tid);
+        if (!opp.club && f.club) patch.club = f.club;
+        if (!opp.rating && f.rating) patch.rating = f.rating;
+    }
+    if (!Object.keys(patch).length) return null;
+    await supa.from('opponents').update(patch).eq('id', opp.id);
+    return patch;
+}
+export async function linkOpponentsByName(profile, opps) {
+    const todo = (opps || []).filter((o) => !o.tracker_id);
+    if (!todo.length) return;
+    const list = await recentResultOpponents(profile);
+    for (const o of todo) {
+        const hit = matchResultOpponent(list, o.name);
+        if (!hit?.tracker_id) continue;
+        o.tracker_id = hit.tracker_id;
+        try { await supa.from('opponents').update({ tracker_id: hit.tracker_id }).eq('id', o.id); } catch (e) { console.warn('link failed', e); }
+    }
+}
+
 // Every result-row loss in the window, split into those already in the
 // journal and those still to log. Logged bouts that match a result row get
 // the facts they were missing, and never anything they already had.
@@ -114,8 +191,7 @@ export async function loadLostBouts(profile) {
 export async function seedFromResult(id) {
     const { data: f, error } = await supa.from('fencer_bouts').select('*').eq('id', id).maybeSingle();
     if (error || !f) return null;
-    const snaps = await snapshotsFor([f.opponent_tracker_id]);
-    const s = snaps.get(f.opponent_tracker_id) || {};
+    const s = await factsFor(f.opponent_tracker_id);
     const stage = stageOf(f);
     return {
         date: f.bout_date,
