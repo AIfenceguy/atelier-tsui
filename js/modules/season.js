@@ -103,7 +103,7 @@ export async function mountSeason(root) {
     body.appendChild(el('div', { class: 'empty' }, [el('p', { class: 'empty-line' }, ['Reading the fields…'])]));
 
     const today = new Date().toISOString().slice(0, 10);
-    const [tsRes, evRes, watchRes, priceRes, boutRes, refreshRes, mineRes, homeRes, runRes, sibRes, marksRes] = await Promise.all([
+    const [tsRes, evRes, watchRes, priceRes, boutRes, refreshRes, mineRes, homeRes, runRes, sibRes, marksRes, goalsRes] = await Promise.all([
         supa.from('true_strength').select('*').eq('profile_id', profile.id),
         supa.from('season_events').select('*').gte('start_date', today).order('start_date'),
         supa.from('flight_watches').select('id,label,destination,depart_date,return_date,hotel_nightly_rate,booked_out_cash,booked_ret_cash,passengers').is('deleted_at', null),
@@ -114,7 +114,8 @@ export async function mountSeason(root) {
         supa.from('household').select('*').maybeSingle(),
         supa.from('refresh_runs').select('finished_at,events_done,pages').not('finished_at', 'is', null).order('id', { ascending: false }).limit(1).maybeSingle(),
         supa.from('profiles').select('id,name,birth_year,strength_de,strength_pool,tracker_id').eq('kind', 'fencer'),
-        supa.from('standings_marks').select('*').eq('weapon', 'MF')
+        supa.from('standings_marks').select('*').eq('weapon', 'MF'),
+        supa.from('fencer_goals').select('*')
     ]);
     body.innerHTML = '';
     if (runRes?.data?.finished_at) {
@@ -141,7 +142,11 @@ export async function mountSeason(root) {
     const latestPrice = {};
     for (const p of priceRes.data || []) if (!latestPrice[p.watch_id]) latestPrice[p.watch_id] = p;
     const siblings = (sibRes.data || []).filter((s) => s.id !== profile.id);
-    const sibling = siblings[0] || null;
+    // What he is chasing, from fencer_goals; a sensible default when unset.
+    const allGoals = new Map((goalsRes?.data || []).map((g) => [g.profile_id, g]));
+    const goals = allGoals.get(profile.id) || { focus_category: primaryCategory(profile.birth_year), secondary: [], ride_along: [], travels_with: null, pressure: 'ranking' };
+    const sibling = (goals.travels_with && siblings.find((s) => s.id === goals.travels_with)) || siblings[0] || null;
+    const siblingGoals = sibling ? (allGoals.get(sibling.id) || { focus_category: primaryCategory(sibling.birth_year), secondary: [], ride_along: [] }) : null;
 
     // Events: the season table, plus anything this member added that is not on it.
     let events = (evRes.data || []).filter((e) => e.projections && e.projections[profile.name]);
@@ -162,7 +167,7 @@ export async function mountSeason(root) {
 
     // Cost per trip (this fencer's own days at that tournament), then intentions.
     const marks = Object.fromEntries((marksRes?.data || []).map((m) => [m.category, m]));
-    const ctx = { profile, sibling, ts90: ts[90], primary: primaryCategory(profile.birth_year), watches, latestPrice, events, sycKeep: new Set(), marks };
+    const ctx = { profile, sibling, siblingGoals, goals, ts90: ts[90], primary: goals.focus_category || primaryCategory(profile.birth_year), watches, latestPrice, events, sycKeep: new Set(), marks };
     for (const e of events) e.cost = tripCost(e, ctx);
     // One SYC counts per youth category: keep the best and one backup as
     // value; the rest are insurance at best.
@@ -173,14 +178,26 @@ export async function mountSeason(root) {
             .sort((a, b) => b.ppd - a.ppd);
         ranked.slice(0, 2).forEach((x) => ctx.sycKeep.add(x.e.id));
     }
-    for (const e of events) e.group = classify(e, ctx);
+    // The focus category is classified first, so secondary categories can see
+    // which weekends he is already at.
+    const focusFirst = events.slice().sort((a, b) => (a.category === ctx.primary ? 0 : 1) - (b.category === ctx.primary ? 0 : 1));
+    for (const e of focusFirst) e.group = classify(e, ctx);
 
     body.appendChild(strengthCard(profile, ts, myForm));
-    const chasing = CAT_ORDER.filter((c) => c !== 'junior' && events.some((e) => e.category === c));
-    for (const cat of chasing) body.appendChild(pointsPlanCard(profile, cat, events.filter((e) => e.category === cat), ctx));
+    body.appendChild(goalsCard(profile, goals, sibling));
+    const planCats = [ctx.primary, ...(goals.secondary || [])].filter((c, i, a) => c && a.indexOf(c) === i && events.some((e) => e.category === c));
+    for (const cat of planCats) body.appendChild(pointsPlanCard(profile, cat, events.filter((e) => e.category === cat), ctx));
     for (const [key, title, sub] of GROUPS) {
         const rows = events.filter((e) => e.group === key);
-        if (rows.length) body.appendChild(groupCard(key, title, sub, rows, ctx, refreshed));
+        if (!rows.length) continue;
+        let t = title, s = sub;
+        if (key === 'addon' && sibling) {
+            t = goals.pressure === 'development' ? `Along for the ride · with ${sibling.name}` : 'Only if already there';
+            s = goals.pressure === 'development'
+                ? `${sibling.name} is going anyway. ${profile.name} fences these with no points pressure; the cost is his fare and an entry.`
+                : `${sibling.name} is going, or ${profile.name} is there for his own category. The cost is an entry, or a fare and an entry.`;
+        }
+        body.appendChild(groupCard(key, t, s, rows, ctx, refreshed));
     }
     body.appendChild(howToRead(profile, sibling));
     body.appendChild(addEventCard(profile));
@@ -195,19 +212,34 @@ function classify(e, ctx) {
     if (p.pending) return 'anchor';
     const pts = p.points_exp || 0;
     const ppd = e.cost?.total > 0 ? pts / e.cost.total * 100 : null;
+    const g = ctx.goals || {};
+    const isFocus = e.category === ctx.primary;
+    const isSecondary = (g.secondary || []).includes(e.category);
+    const isRide = (g.ride_along || []).includes(e.category) || (!isFocus && !isSecondary);
     const playingUp = ctx.primary && catRank(e.category) > catRank(ctx.primary);
     const formDown = ctx.ts90 && ctx.ts90.vs_weaker >= 6 && ctx.ts90.losses_vs_weaker / ctx.ts90.vs_weaker >= 0.3;
     const sibGoing = siblingGoing(e, ctx);
-
+    const selfGoing = selfGoingAnyway(e, ctx);
     const flyIn = e.travel === 'fly';
 
-    if (NATIONAL.has(e.tier)) {
-        // A national event is an anchor when it can fill a slot: his own
-        // category, or a cadet national result that counts for Y14.
-        if (!playingUp || e.category === 'cadet' && ctx.primary === 'y14') return pts >= 3 ? 'anchor' : 'skip';
-        return sibGoing ? 'addon' : 'skip';
+    // Ride-along categories: at a national event only when the brother is
+    // going; at a regional only when someone is at that venue anyway, and not
+    // while he is playing up with his form down.
+    if (isRide) {
+        if (NATIONAL.has(e.tier)) return sibGoing ? 'addon' : 'skip';
+        return (sibGoing || selfGoing) && !(playingUp && formDown) ? 'addon' : 'skip';
     }
-    if (playingUp && formDown) return sibGoing && pts >= 8 ? 'addon' : 'skip';
+
+    if (NATIONAL.has(e.tier)) {
+        // A national event anchors the season when it fills a slot in the
+        // focus category, or a cadet national result that also counts for Y14.
+        if (isFocus || (e.category === 'cadet' && ctx.primary === 'y14')) return pts >= 3 ? 'anchor' : 'skip';
+        return (sibGoing || selfGoing) ? 'addon' : 'skip';
+    }
+    if (playingUp && formDown) return (sibGoing || selfGoing) && pts >= 8 ? 'addon' : 'skip';
+    // Secondary category at a weekend he is already at for the focus category:
+    // points along the way for the price of an entry.
+    if (isSecondary && selfGoing && pts >= 8) return 'value';
     // Real points: value when the trip is priced right, an add-on when the
     // brother is going anyway, otherwise not worth the fare. A third SYC in a
     // youth category is insurance, not value: only one counts.
@@ -224,15 +256,23 @@ function classify(e, ctx) {
 }
 
 // Is the brother going to this tournament anyway? He is when he has a
-// national event there, or real points in his own age category. A
+// national event there in his focus category, or real points in it. A
 // participation-level entry in a category he is playing up does not count.
 function siblingGoing(e, ctx) {
     if (!ctx.sibling) return false;
-    const sibPrimary = primaryCategory(ctx.sibling.birth_year);
+    const sibFocus = ctx.siblingGoals?.focus_category || primaryCategory(ctx.sibling.birth_year);
+    const sibSecondary = ctx.siblingGoals?.secondary || [];
     return ctx.events.some((x) => x.tournament === e.tournament && String(x.start_date).slice(0, 7) === String(e.start_date).slice(0, 7)
-        && (NATIONAL.has(x.tier)
-            || (x.category === sibPrimary && (x.projections?.[ctx.sibling.name]?.points_exp || 0) >= 20)
-            || (x.category !== sibPrimary && (x.projections?.[ctx.sibling.name]?.points_exp || 0) >= 30 && x.travel !== 'fly')));
+        && ((NATIONAL.has(x.tier) && (x.category === sibFocus || (x.category === 'cadet' && sibFocus === 'y14')))
+            || (x.category === sibFocus && (x.projections?.[ctx.sibling.name]?.points_exp || 0) >= 20)
+            || (sibSecondary.includes(x.category) && (x.projections?.[ctx.sibling.name]?.points_exp || 0) >= 30 && x.travel !== 'fly')));
+}
+
+// Is he at this tournament anyway for his focus category? True once a focus
+// event there has been sorted as an anchor or value.
+function selfGoingAnyway(e, ctx) {
+    return ctx.events.some((x) => x !== e && x.tournament === e.tournament && String(x.start_date).slice(0, 7) === String(e.start_date).slice(0, 7)
+        && x.category === ctx.primary && (x.group === 'anchor' || x.group === 'value'));
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +285,8 @@ function pointsPlanCard(profile, cat, rows, ctx) {
     const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
     const playingUp = ctx.primary && catRank(cat) > catRank(ctx.primary);
     const formDown = ctx.ts90 && ctx.ts90.vs_weaker >= 6 && ctx.ts90.losses_vs_weaker / ctx.ts90.vs_weaker >= 0.3;
-    wrap.appendChild(label(`${catLabel(cat)} · points plan${playingUp ? ' · playing up' : ''}`));
+    const isFocus = cat === ctx.primary;
+    wrap.appendChild(label(isFocus ? `${catLabel(cat)} · ranking plan` : `${catLabel(cat)} · points along the way`));
 
     const slots = [];
     if (cat === 'y12' || cat === 'y14') {
@@ -271,7 +312,9 @@ function pointsPlanCard(profile, cat, rows, ctx) {
         const total = all.reduce((a, e) => a + P(e), 0);
         wrap.appendChild(serif(`${Math.round(total)} points projected`, '26px', total >= 150 ? GOOD : INK));
         wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '2px 0 10px', lineHeight: '1.5' } }, [
-            'Best six results count, and regional Cadet events (RJCC, RCC) count nationally this season: a top 8 is 36.6, top 16 is 31.2, anywhere in the top 64 is 22.2. A Challenger-bracket NAC top 64 is 31.8.'
+            'Best six results count, and regional Cadet events (RJCC, RCC) count nationally this season: a top 8 is 36.6, top 16 is 31.2, anywhere in the top 64 is 22.2. ',
+            'At a NAC the field splits above 168 entries: the Elite bracket (capped at 112) pays 51.6 for a top 64 and 81 for a top 32; the Challenger bracket pays 31.8 and 39.6. NAC rows below show the Challenger figure with the Elite figure in brackets. ',
+            'USA Fencing has published the threshold and the cap but not the order it fills Elite with for Cadet; for the first events it is drawn from last season\'s national results re-scored on the new tables.'
         ]));
     }
     // Where that total would sit on the real standings today.
@@ -313,7 +356,8 @@ function pointsPlanCard(profile, cat, rows, ctx) {
             el('b', {}, [s.ev.tournament]), el('span', { class: 'label', style: { color: INK_MUTE, marginLeft: '6px' } }, [`${fmtDay(s.ev.start_date)} · seed ${p.seed_form} · ${ordinal(p.median || Math.round(p.exp))}`]),
             s.alt ? el('div', { class: 'label', style: { color: INK_MUTE } }, [`backup: ${s.alt.tournament}, ${Math.round(P(s.alt))} pts`]) : null
         ].filter(Boolean)));
-        grid.appendChild(num(Math.round(P(s.ev)).toString(), P(s.ev) >= 30 ? GOOD : INK, '18px'));
+        const elite = s.ev.projections[name]?.points_exp_if_elite;
+        grid.appendChild(num(Math.round(P(s.ev)).toString() + (elite ? ` (${Math.round(elite)})` : ''), P(s.ev) >= 30 ? GOOD : INK, '18px'));
     }
     wrap.appendChild(grid);
     return wrap;
@@ -487,6 +531,21 @@ function strengthCard(profile, ts, myForm) {
                 : 'Pools and DE are in step; his seed matches how he fences.'
         ]));
     }
+    return wrap;
+}
+
+// What he is chasing this season, in one card, so the plan below reads right.
+function goalsCard(profile, goals, sibling) {
+    const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
+    wrap.appendChild(label('This season · what he is chasing'));
+    const focus = catLabel(goals.focus_category);
+    wrap.appendChild(serif(goals.pressure === 'development' ? `${focus} ranking, without the pressure` : `${focus} national ranking`, '26px'));
+    const bits = [];
+    if (goals.secondary?.length) bits.push(`${goals.secondary.map(catLabel).join(' and ')}: points along the way, entered when he is there anyway or the trip pays for itself.`);
+    if (goals.ride_along?.length) bits.push(`${goals.ride_along.map(catLabel).join(' and ')}: only when the family is at the venue${sibling ? ` for ${sibling.name}` : ''}, no points pressure.`);
+    if (goals.travels_with && sibling) bits.push(`Travels with ${sibling.name}; NAC weekends are ${sibling.name}'s, and ${profile.name}'s cost there is his fare and entries.`);
+    if (goals.notes) bits.push(goals.notes);
+    wrap.appendChild(el('p', { style: { color: INK, fontSize: '13px', margin: '6px 0 0', lineHeight: '1.55' } }, [bits.join(' ')]));
     return wrap;
 }
 

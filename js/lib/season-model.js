@@ -145,10 +145,12 @@ export function forecast({ entrants, snapshots, myStrength, myOfficial, myPool, 
     const dist = simulate(field, myStrength);
     const n = field.length + 1;
     const cum = (k) => dist.slice(1, k + 1).reduce((a, b) => a + b, 0);
-    let exp = 0, pts = 0, median = null;
+    let exp = 0, pts = 0, ptsElite = 0, median = null;
+    const cadetNac = String(category).toLowerCase() === 'cadet' && String(tier).toLowerCase() === 'nac';
     for (let p = 1; p <= n; p++) {
         exp += p * dist[p];
         pts += dist[p] * pointsFor(category, tier, p, n);
+        if (cadetNac) ptsElite += dist[p] * pointsFor(category, 'elite', p, n);
         if (median == null && cum(p) >= 0.5) median = p;
     }
     const trend = { rising: 0, fading: 0, inactive: 0 };
@@ -160,6 +162,7 @@ export function forecast({ entrants, snapshots, myStrength, myOfficial, myPool, 
         seed_pool,
         p8: +cum(8).toFixed(2), p16: +cum(16).toFixed(2), p32: +cum(32).toFixed(2), p64: +cum(64).toFixed(2),
         exp: +exp.toFixed(1), median, points_exp: +pts.toFixed(1),
+        ...(cadetNac ? { points_exp_if_elite: +ptsElite.toFixed(1) } : {}),
         points_if_top8: pointsFor(category, tier, 8, n), points_if_top16: pointsFor(category, tier, 16, n),
         trend, live: true,
         // the ten nearest seeds above him, for a by-hand read of their recent bouts
