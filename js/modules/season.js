@@ -185,6 +185,7 @@ export async function mountSeason(root) {
 
     body.appendChild(strengthCard(profile, ts, myForm));
     body.appendChild(goalsCard(profile, goals, sibling));
+    body.appendChild(primerCard(goals));
     const planCats = [ctx.primary, ...(goals.secondary || [])].filter((c, i, a) => c && a.indexOf(c) === i && events.some((e) => e.category === c));
     for (const cat of planCats) body.appendChild(pointsPlanCard(profile, cat, events.filter((e) => e.category === cat), ctx));
     for (const [key, title, sub] of GROUPS) {
@@ -202,6 +203,63 @@ export async function mountSeason(root) {
     body.appendChild(howToRead(profile, sibling));
     body.appendChild(addEventCard(profile));
     body.appendChild(recentBouts(boutRes.data || [], profile));
+}
+
+// ---------------------------------------------------------------------------
+// What an event actually adds to his season total, under the counting rules.
+// Points on the day are not the point: a fourth SYC adds nothing, a seventh
+// Cadet result adds nothing, and a parent needs to see that in one number.
+// ---------------------------------------------------------------------------
+function projectTotal(cat, candidates, name) {
+    const P = (e) => e.projections[name]?.points_exp || 0;
+    if (cat === 'y12' || cat === 'y14') {
+        const syc = candidates.filter((e) => e.tier === 'syc').sort((a, b) => P(b) - P(a));
+        const nat = candidates.filter((e) => NATIONAL.has(e.tier)).sort((a, b) => P(b) - P(a));
+        const picks = [];
+        if (syc[0]) picks.push(P(syc[0]));
+        for (const e of nat.slice(0, syc[0] ? 3 : 4)) picks.push(P(e));
+        return picks.reduce((a, b) => a + b, 0);
+    }
+    if (cat === 'cadet') return candidates.map(P).sort((a, b) => b - a).slice(0, 6).reduce((a, b) => a + b, 0);
+    return 0;
+}
+
+function marginalPoints(e, ctx) {
+    const name = ctx.profile.name;
+    const cat = e.category;
+    if (!['y12', 'y14', 'cadet'].includes(cat)) return null;
+    // The pool he is counting on: the events not marked skip in this category,
+    // plus, for Y14, cadet national results.
+    const base = ctx.events.filter((x) => x !== e && x.group !== 'skip' && (x.category === cat || (cat === 'y14' && x.category === 'cadet' && NATIONAL.has(x.tier))));
+    const without = projectTotal(cat, base, name);
+    const withE = projectTotal(cat, [...base, e], name);
+    return Math.max(0, withE - without);
+}
+
+// The sentence a parent reads first.
+function verdict(e, ctx) {
+    const p = e.projections[ctx.profile.name] || {};
+    const pts = p.points_exp || 0;
+    const add = marginalPoints(e, ctx);
+    const cost = e.cost?.total || 0;
+    const travel = e.travel === 'fly' ? 'a flight' : e.travel === 'drive' ? 'a drive' : e.travel === 'local' ? 'a day trip' : 'travel';
+    const g = e.group;
+    if (p.pending) return { word: 'Reading', tone: INK_MUTE, why: 'The field has not been read yet.' };
+    if (g === 'anchor') return { word: 'Family trip', tone: GOOD, why: `A national event that fills one of his counted slots: about ${Math.round(pts)} points${add != null && add < pts - 1 ? `, of which ${Math.round(add)} actually raise his total` : ''}.` };
+    if (g === 'value') return { word: 'Go', tone: GOOD, why: add != null && add > 0 ? `Adds about ${Math.round(add)} points to his ranking total for ${money(cost)} and ${travel}.` : `About ${Math.round(pts)} points on the day for ${money(cost)} and ${travel}.` };
+    if (g === 'confidence') return { word: 'Go if it suits', tone: INK, why: `No national points here. He would start ${ordinal(p.seed_form)} of ${p.field_n}: a weekend of winning, which is worth something on its own.` };
+    if (g === 'challenge') return { word: 'Optional', tone: INK, why: `Development, not points. He would start ${ordinal(p.seed_form)} of ${p.field_n} and learn from the bouts he loses.` };
+    if (g === 'addon') return { word: 'Only if already there', tone: INK, why: `${add ? `Adds about ${Math.round(add)} points` : `About ${Math.round(pts)} points on the day`} for an entry${e.travel === 'fly' ? ' and a fare' : ''}, because the family is at this venue anyway.` };
+    // skip: say which rule killed it, in the parent's words
+    const isRide = (ctx.goals?.ride_along || []).includes(e.category) || (e.category !== ctx.primary && !(ctx.goals?.secondary || []).includes(e.category));
+    const playingUp = ctx.primary && catRank(e.category) > catRank(ctx.primary);
+    const formDown = ctx.ts90 && ctx.ts90.vs_weaker >= 6 && ctx.ts90.losses_vs_weaker / ctx.ts90.vs_weaker >= 0.3;
+    if (isRide) return { word: 'Skip', tone: BAD, why: `${catLabel(e.category)} is not what he is chasing this season, and nobody is at this venue anyway.` };
+    if (playingUp && formDown) return { word: 'Skip', tone: BAD, why: `Playing up while he is losing ${ctx.ts90.losses_vs_weaker} of ${ctx.ts90.vs_weaker} bouts to weaker fencers. A bracket of losses, not points.` };
+    if (e.tier === 'syc' && pts >= 20) return { word: 'Skip', tone: BAD, why: `Only one SYC counts and a better one is on the plan. Adds ${Math.round(add || 0)} to his total, whatever he scores on the day.` };
+    if (e.tier === 'ryc') return { word: 'Skip', tone: BAD, why: `Regional youth events pay no national points, and this one is ${travel}${cost ? ` for ${money(cost)}` : ''}.` };
+    if (pts >= 8 && cost > 0) return { word: 'Skip', tone: BAD, why: `${Math.round(pts)} points for ${money(cost)} and ${travel}. The drives on the plan pay three times better.` };
+    return { word: 'Skip', tone: BAD, why: `Nothing here moves his ranking: he would finish around ${ordinal(Math.round(p.median || p.exp || 0))} of ${p.field_n}.` };
 }
 
 // ---------------------------------------------------------------------------
@@ -405,20 +463,28 @@ function eventRow(e, i, ctx, refreshed, group) {
     ]));
     const travelWord = e.travel === 'local' ? 'drive, no hotel' : e.travel === 'drive' ? 'drive' : e.travel === 'fly' ? 'fly' : '';
     row.appendChild(el('div', { class: 'label', style: { color: INK_MUTE } }, [[e.city, e.venue, travelWord].filter(Boolean).join(' · ') || 'City not set']));
+    // The verdict first, in the parent's words.
+    const v = verdict(e, ctx);
+    row.appendChild(el('p', { style: { margin: '4px 0 2px', fontSize: '14px', lineHeight: '1.5', color: INK } }, [
+        el('span', { class: 'label', style: { color: v.tone, fontWeight: '700', marginRight: '8px' } }, [v.word]),
+        v.why
+    ]));
     if (p.pending) {
         row.appendChild(el('p', { style: { color: WARN, fontSize: '13px', margin: '2px 0 0' } }, ['Field not read yet.']));
     } else {
+        const add = marginalPoints(e, ctx);
         const stats = [
-            stat('Field', `${e.entrants ?? p.field_n ?? '—'}`),
-            stat('Seed', `${p.seed_form}` + (p.seed_official && p.seed_official !== p.seed_form ? ` (${p.seed_official})` : ''), p.seed_form <= 8 ? GOOD : INK),
-            ...(p.seed_pool ? [stat('By pools', `${p.seed_pool}`, p.seed_pool > p.seed_form + 4 ? WARN : INK)] : []),
-            stat('Expected', ordinal(Math.round(p.median || p.exp)), finishColor),
+            stat('Fencers', `${e.entrants ?? p.field_n ?? '—'}`),
+            stat("He'd start", ordinal(p.seed_form) + (p.seed_official && p.seed_official !== p.seed_form ? ` (${ordinal(p.seed_official)})` : ''), p.seed_form <= 8 ? GOOD : INK),
+            ...(p.seed_pool ? [stat('By pools', ordinal(p.seed_pool), p.seed_pool > p.seed_form + 4 ? WARN : INK)] : []),
+            stat('Likely finish', ordinal(Math.round(p.median || p.exp)), finishColor),
             stat('Top 8', pct(p.p8), p.p8 >= 0.6 ? GOOD : INK),
-            stat('Points', p.points_exp == null ? '—' : pts.toFixed(0), pts >= 25 ? GOOD : INK)
+            stat('Points on the day', p.points_exp == null ? '—' : pts.toFixed(0), pts >= 25 ? GOOD : INK),
+            ...(add != null ? [stat('Adds to ranking', add.toFixed(0), add >= 20 ? GOOD : add === 0 ? BAD : INK)] : [])
         ];
         if (group === 'addon' && cost.marginal != null) stats.push(stat('His cost', money(cost.marginal), GOOD));
-        else stats.push(stat('Trip', cost.total > 0 ? money(cost.total) : '—', cost.live ? GOOD : INK));
-        if (group === 'value' || group === 'anchor') stats.push(stat('Pts / $100', ppd == null ? '—' : ppd.toFixed(1), ppd >= 5 ? GOOD : INK));
+        else stats.push(stat('Cost', cost.total > 0 ? money(cost.total) : '—', cost.live ? GOOD : INK));
+        if (group === 'value' || group === 'anchor') stats.push(stat('Points per $100', ppd == null ? '—' : ppd.toFixed(1), ppd >= 5 ? GOOD : INK));
         row.appendChild(el('div', { style: { display: 'flex', gap: '14px', flexWrap: 'wrap', marginTop: '2px' } }, stats));
     }
     const note = [];
@@ -531,6 +597,31 @@ function strengthCard(profile, ts, myForm) {
                 : 'Pools and DE are in step; his seed matches how he fences.'
         ]));
     }
+    return wrap;
+}
+
+// For the parent who has never seen the system: how points work, in the
+// fewest words that are still true. Folded by default; one tap opens it.
+function primerCard(goals) {
+    const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
+    wrap.appendChild(label('New to this? How the points work'));
+    const cat = goals.focus_category;
+    const youth = cat === 'y12' || cat === 'y14';
+    const lines = youth ? [
+        'National ranking comes from national points. Only three kinds of event pay them for his age: Super Youth Circuit (SYC) weekends, NACs, and Summer Nationals.',
+        'Regional youth events (RYC) pay no national points at all, however well he does. They are for confidence and practice.',
+        'His four best results count. Only one of them can be an SYC, so a second and third SYC add nothing to his ranking, even with a medal.',
+        cat === 'y14' ? 'Cadet national results count for Y14 too, which is why a Cadet NAC entry can be worth more to his Y14 ranking than another SYC.' : 'A NAC pays more than an SYC, but only if he finishes in the top 32 of a much deeper field.',
+        'Going to more weekends does not mean more points. Going to the right four does. Every event below says what it adds to his total, and Skip means it adds nothing worth the money.'
+    ] : [
+        'Cadet national points now come from regional events (RJCC, RCC) as well as NACs, and his six best results count.',
+        'A regional top 8 is 36.6 points; anywhere in the top 64 is 22.2. A NAC pays more only in the Elite bracket; in Challenger a top 64 is 31.8.',
+        'Going to more weekends does not mean more points. Six good results do. Every event below says what it adds to his total.'
+    ];
+    const list = el('ul', { style: { margin: '6px 0 0', paddingLeft: '18px', color: INK, fontSize: '13px', lineHeight: '1.55' }, hidden: true }, lines.map((t) => el('li', { style: { marginBottom: '4px' } }, [t])));
+    const btn = el('button', { class: 'btn btn-ghost btn-sm btn-mono-label', style: { marginTop: '6px' } }, ['Read it, one minute']);
+    btn.onclick = () => { list.hidden = !list.hidden; btn.textContent = list.hidden ? 'Read it, one minute' : 'Hide'; };
+    wrap.appendChild(btn); wrap.appendChild(list);
     return wrap;
 }
 
