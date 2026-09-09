@@ -190,10 +190,18 @@ export async function mountSeason(root) {
     // Events: the season table, plus anything this member added that is not on it.
     let events = (evRes.data || []).filter((e) => e.projections && e.projections[profile.name]);
     const known = new Set(events.map((e) => Number(e.ft_event_id)).filter(Boolean));
+    // A FencingTracker event the member added is the calendar's own row when
+    // the tournament, category and weekend agree; the row takes the id and
+    // the live field, and the screen never shows the same event twice.
+    const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const sameTournament = (a, b) => { const x = normName(a), y = normName(b); return Boolean(x && y) && (x === y || x.includes(y) || y.includes(x)); };
+    const daysApart = (a, b) => Math.abs((new Date(String(a).slice(0, 10)) - new Date(String(b).slice(0, 10))) / 864e5);
     for (const m of mine) {
-        if (known.has(Number(m.ft_event_id))) continue;
+        if (!m.ft_event_id || known.has(Number(m.ft_event_id))) continue;
         const r = refreshed.get(Number(m.ft_event_id));
         const cat = m.category || categoryOf(r?.title);
+        const twin = events.find((e) => !e.ft_event_id && e.category === cat && sameTournament(e.tournament, m.tournament || r?.title) && daysApart(e.start_date, m.event_date || r?.event_date || e.start_date) <= 4);
+        if (twin) { twin.ft_event_id = m.ft_event_id; known.add(Number(m.ft_event_id)); continue; }
         events.push({
             id: 'member-' + m.id, ft_event_id: m.ft_event_id, tournament: m.tournament || r?.title || `FencingTracker event ${m.ft_event_id}`,
             category: cat, tier: tierOf(m.tournament || r?.title, cat), start_date: m.event_date || r?.event_date || today, end_date: m.event_date || r?.event_date || today,
@@ -592,8 +600,8 @@ function weekendsCard(key, title, sub, rows, ctx, refreshed) {
                 el('div', { class: 'label', style: { color: st === 'going' ? GOOD : st === 'considering' ? WARN : INK_MUTE } }, [st === 'going' ? 'Entered' : st === 'considering' ? 'Considering' : !ok ? 'Not eligible' : onPlan ? 'Could add' : 'Eligible, not on his plan'])
             ]));
             grid.appendChild(el('span', { style: { color: ok ? INK : INK_MUTE, fontSize: '13px' } }, [countsToward(e).join(' + ') || '—']));
-            grid.appendChild(el('span', { class: 'num', style: { color: INK, fontSize: '13px', textAlign: 'right' } }, [p && ok ? `${p.seed_form}/${p.field_n}` : '—']));
-            grid.appendChild(el('span', { class: 'num', style: { color: INK, fontSize: '13px', textAlign: 'right' } }, [p && ok ? pct(p.p8) : '—']));
+            grid.appendChild(el('span', { class: 'num', style: { color: INK, fontSize: '13px', textAlign: 'right' } }, [p && ok && p.seed_form != null && p.field_n ? `${p.seed_form}/${p.field_n}` : '—']));
+            grid.appendChild(el('span', { class: 'num', style: { color: INK, fontSize: '13px', textAlign: 'right' } }, [p && ok && p.p8 != null ? pct(p.p8) : '—']));
             grid.appendChild(el('span', { class: 'num', style: { color: pts >= 25 ? GOOD : INK, fontSize: '13px', textAlign: 'right', fontWeight: '600' } }, [p && ok && pts != null ? `${Math.round(pts)}${elite ? ` (${Math.round(elite)})` : ''}` : '—']));
             const cell = el('span', { style: { textAlign: 'right' } });
             if (ok && st !== 'going' && PARENT) {
