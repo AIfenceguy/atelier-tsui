@@ -68,7 +68,20 @@ export function pointsFor(category, tier, place, fieldSize) {
 
 // ---- opponents ------------------------------------------------------------
 // A fencer_snapshot row → the strength to seed them at, and a trend tag.
-export function tiltedStrength(snap, listedStrength) {
+// Placings in one category only, from the snapshot's twelve-month history.
+// A Division I filler finish says nothing about a Y14 bracket, and a Y12
+// podium must not flatter a Y14 seed, so the placings tilt reads the event's
+// own category and nothing else.
+export function placingsIn(snap, category, days) {
+    const cat = String(category || '').toLowerCase();
+    const hist = Array.isArray(snap?.history_json) ? snap.history_json : [];
+    if (!cat || !hist.length) return { n: 0, median: null };
+    const cut = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+    const w = hist.filter((r) => r.d >= cut && r.field > 0 && categoryOf(r.event) === cat).map((r) => r.place / r.field).sort((a, b) => a - b);
+    return { n: w.length, median: w.length ? w[Math.floor(w.length / 2)] : null };
+}
+
+export function tiltedStrength(snap, listedStrength, category = null) {
     const base = snap?.strength_de ?? listedStrength ?? null;
     if (base == null) return { strength: null, tag: 'unknown' };
     if (!snap || snap.de_90d == null) return { strength: base, tag: 'steady' };
@@ -76,10 +89,19 @@ export function tiltedStrength(snap, listedStrength) {
     // 1. The DE strength trend over 90 days, read as the visible edge of a larger move.
     const move = (snap.events_90d ?? 0) >= 2 ? snap.de_now - snap.de_90d : 0;
     let adj = Math.max(-200, Math.min(200, 2 * move));
-    // 2. What they actually placed, last 3 months: a median in the top quarter of
-    //    their fields is a fencer seeding below their level; bottom 40% the reverse.
-    const med = snap.median_pct_90d ?? snap.median_pct_180d;
-    const n = snap.results_90d ?? snap.results_180d ?? 0;
+    // 2. What they actually placed, last 3 months, in this category only: a
+    //    median in the top quarter of their fields is a fencer seeding below
+    //    their level; bottom 40% the reverse. With a category, other
+    //    categories are ignored rather than mixed in.
+    let med, n;
+    if (category) {
+        const p90 = placingsIn(snap, category, 90);
+        const p = p90.n >= 2 ? p90 : placingsIn(snap, category, 180);
+        med = p.median; n = p.n;
+    } else {
+        med = snap.median_pct_90d ?? snap.median_pct_180d;
+        n = snap.results_90d ?? snap.results_180d ?? 0;
+    }
     if (med != null && n >= 2) {
         if (med <= 0.25) adj += 40;
         else if (med >= 0.6) adj -= 40;
@@ -94,10 +116,16 @@ export function tiltedStrength(snap, listedStrength) {
 }
 
 // A short, parent-readable line about a registered fencer's recent form.
-export function formLine(snap) {
+export function formLine(snap, category = null) {
     if (!snap) return 'no recent record';
     const bits = [];
-    if (snap.results_90d) bits.push(`${snap.results_90d} event${snap.results_90d > 1 ? 's' : ''} in 3 mo, median top ${Math.round((snap.median_pct_90d || 0) * 100)}%`);
+    if (category) {
+        const p90 = placingsIn(snap, category, 90), p180 = placingsIn(snap, category, 180);
+        const lbl = String(category).toUpperCase();
+        if (p90.n) bits.push(`${p90.n} ${lbl} event${p90.n > 1 ? 's' : ''} in 3 mo, median top ${Math.round(p90.median * 100)}%`);
+        else if (p180.n) bits.push(`${p180.n} ${lbl} event${p180.n > 1 ? 's' : ''} in 6 mo, median top ${Math.round(p180.median * 100)}%`);
+        else bits.push(`no ${lbl} events in 6 months`);
+    } else if (snap.results_90d) bits.push(`${snap.results_90d} event${snap.results_90d > 1 ? 's' : ''} in 3 mo, median top ${Math.round((snap.median_pct_90d || 0) * 100)}%`);
     else if (snap.results_180d) bits.push(`${snap.results_180d} event${snap.results_180d > 1 ? 's' : ''} in 6 mo, median top ${Math.round((snap.median_pct_180d || 0) * 100)}%`);
     else bits.push('no events in 6 months');
     if (snap.de_90d != null && snap.de_now != null && Math.abs(snap.de_now - snap.de_90d) >= 20) bits.push(`DE ${snap.de_now - snap.de_90d > 0 ? '+' : ''}${snap.de_now - snap.de_90d} in 3 mo`);
@@ -146,7 +174,7 @@ export function forecast({ entrants, snapshots, myStrength, myOfficial, myPool, 
     for (const e of entrants) {
         if (myTrackerId && Number(e.tracker_id) === Number(myTrackerId)) continue;
         const snap = snapshots?.get(Number(e.tracker_id));
-        const { strength, tag } = tiltedStrength(snap, e.strength_de);
+        const { strength, tag } = tiltedStrength(snap, e.strength_de, category);
         if (strength != null && strength > 800 && strength < 3200) tagged.push({ ...e, strength, tag, snap });
     }
     // Where he would sit if the pools went by pool strength: the seed the
@@ -181,10 +209,10 @@ export function forecast({ entrants, snapshots, myStrength, myOfficial, myPool, 
         // the ten nearest seeds above him, for a by-hand read of their recent bouts
         neighbours: tagged.slice().sort((a, b) => b.strength - a.strength)
             .filter((x) => x.strength >= myStrength - 80).slice(-10).reverse()
-            .map((x) => ({ name: x.name, tracker_id: x.tracker_id, strength: Math.round(x.strength), tag: x.tag, form: formLine(x.snap), pool: poolOf(x) })),
+            .map((x) => ({ name: x.name, tracker_id: x.tracker_id, strength: Math.round(x.strength), tag: x.tag, form: formLine(x.snap, category), pool: poolOf(x) })),
         // the whole registered field, strongest first, with his chance in one bout
         field_list: tagged.slice().sort((a, b) => b.strength - a.strength)
-            .map((x) => ({ name: x.name, tracker_id: x.tracker_id, strength: Math.round(x.strength), tag: x.tag, form: formLine(x.snap), p_beat: +pwin(myStrength, x.strength).toFixed(2) }))
+            .map((x) => ({ name: x.name, tracker_id: x.tracker_id, strength: Math.round(x.strength), tag: x.tag, form: formLine(x.snap, category), p_beat: +pwin(myStrength, x.strength).toFixed(2) }))
     };
 }
 

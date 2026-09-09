@@ -95,6 +95,26 @@ export async function mountInsight(root) {
         winsById.get(w.tracker_id)[w.window_days] = w;
     }
     const flagsById = new Map((flagRes.data || []).map((f) => [f.tracker_id, f]));
+    // Placings per category. A Y14 podium and a Division I filler finish are
+    // not the same story, so the roster for a Y14 event reads Y14 placings only
+    // and shows the other categories beside them.
+    const [{ data: winCatRows }, { data: flagCatRows }] = await Promise.all([
+        supa.from('opponent_windows_by_category').select('*'),
+        supa.from('opponent_flags_by_category').select('tracker_id,category,flags,events_365,median_365')
+    ]);
+    const winsByCat = new Map();
+    for (const w of (winCatRows || [])) {
+        const c = String(w.category || '').toLowerCase();
+        if (!winsByCat.has(w.tracker_id)) winsByCat.set(w.tracker_id, {});
+        const byCat = winsByCat.get(w.tracker_id);
+        if (!byCat[c]) byCat[c] = {};
+        byCat[c][w.window_days] = w;
+    }
+    const flagsByCat = new Map();
+    for (const f of (flagCatRows || [])) {
+        if (!flagsByCat.has(f.tracker_id)) flagsByCat.set(f.tracker_id, {});
+        flagsByCat.get(f.tracker_id)[String(f.category || '').toLowerCase()] = f;
+    }
     const briefByEvent = new Map();
     for (const n of (briefRes.data || [])) {
         const k = n.input_summary?.event_id;
@@ -227,7 +247,7 @@ export async function mountInsight(root) {
         // The tier above: the fencers one band up, read from twelve months of
         // their own results. Strength says where they are seeded; the windows
         // say what they have actually done lately.
-        card.appendChild(await tierBlock(e, profile, goal, oppById, winsById, flagsById, briefByEvent.get(e.id)));
+        card.appendChild(await tierBlock(e, profile, goal, oppById, winsByCat, flagsByCat, flagsById, briefByEvent.get(e.id)));
         body.appendChild(card);
     }
 
@@ -311,7 +331,18 @@ export async function mountInsight(root) {
 
 const pctColor = (v) => v == null ? INK_MUTE : v <= 15 ? GOOD : v <= 40 ? INK : INK_MUTE;
 
-async function tierBlock(e, profile, goal, oppById, winsById, flagsById, cachedBrief) {
+const CAT_ORDER = ['y8', 'y10', 'y12', 'y14', 'cadet', 'junior', 'div3', 'div2', 'div1', 'senior', 'vet'];
+const catRank = (c) => { const i = CAT_ORDER.indexOf(String(c || '').toLowerCase()); return i < 0 ? 99 : i; };
+
+async function tierBlock(e, profile, goal, oppById, winsByCat, flagsByCat, flagsById, cachedBrief) {
+    const cat = String(e.category || '').toLowerCase();
+    // Higher categories translated up onto this category's scale at half
+    // weight (Cadet and Junior for a Y14 event); lower ones never count.
+    const scaledById = new Map();
+    try {
+        const { data } = await supa.rpc('opponent_windows_for', { p_target: cat });
+        for (const r of data || []) { if (!scaledById.has(r.tracker_id)) scaledById.set(r.tracker_id, {}); scaledById.get(r.tracker_id)[r.window_days] = r; }
+    } catch (err) { console.warn('scaled windows skipped', err); }
     const wrap = el('div', { style: { marginTop: '14px', borderTop: '1px solid var(--rule)', paddingTop: '12px' } });
     let tier = [];
     try {
@@ -333,8 +364,8 @@ async function tierBlock(e, profile, goal, oppById, winsById, flagsById, cachedB
         el('span', { class: 'label', style: { color: INK_MUTE } }, [`${tier.length} fencers \u00b7 ${bandLabel}`])
     ]));
     wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '2px 0 8px', lineHeight: '1.5' } }, [
-        'Median finish as a percentage of the field over 3, 6, 9 and 12 months \u2014 lower is better, 10 means top tenth. ',
-        'Flags are read from placings alone.'
+        `${catLabel(cat)} placings only: median finish as a percentage of a ${catLabel(cat)} field over 3, 6, 9 and 12 months \u2014 lower is better, 10 means top tenth. `,
+        `The line under each name shows his 12-month median in every category he enters. Where he also fences above ${catLabel(cat)}, a second line scales those results up onto the ${catLabel(cat)} scale at half weight. Lower categories never count toward a ${catLabel(cat)} number, and Division I has no reference to scale from, so it is listed only. Flags are read from placings in this category alone.`
     ]));
 
     // column header
@@ -346,9 +377,18 @@ async function tierBlock(e, profile, goal, oppById, winsById, flagsById, cachedB
 
     for (const t of tier) {
         const o = oppById.get(t.tracker_id) || {};
-        const w = winsById.get(t.tracker_id) || {};
-        const fl = flagsById.get(t.tracker_id)?.flags || [];
+        const byCat = winsByCat.get(t.tracker_id) || {};
+        const w = byCat[cat] || {};
         const m = (d) => w[d]?.median_pct;
+        // Flags for this category; if he has never fenced it, say so, and keep
+        // only the "rusty" flag, which is about him and not the category.
+        const catFlags = flagsByCat.get(t.tracker_id)?.[cat];
+        const fl = catFlags ? (catFlags.flags || [])
+            : [`no ${catLabel(cat)} results:nothing in this category in a year`,
+               ...(flagsById.get(t.tracker_id)?.flags || []).filter((f) => /^rusty/i.test(String(f)))];
+        // Every category he enters, 12-month median and count, event category first.
+        const breakdown = Object.keys(byCat).filter((c) => byCat[c][365]).sort((a, b) => (a === cat ? -1 : b === cat ? 1 : catRank(a) - catRank(b)))
+            .map((c) => ({ c, med: byCat[c][365].median_pct, n: byCat[c][365].events }));
         const row = el('div', { style: { borderTop: '1px solid var(--rule)', padding: '9px 0' } });
         row.appendChild(el('div', { style: { display: 'grid', gridTemplateColumns: '34px 1fr 52px 52px 52px 52px', gap: '8px', alignItems: 'baseline' } }, [
             el('span', { class: 'num', style: { color: INK_MUTE, fontSize: '12px' } }, [String(t.rank)]),
@@ -358,7 +398,20 @@ async function tierBlock(e, profile, goal, oppById, winsById, flagsById, cachedB
                     : el('span', { style: { color: INK, fontSize: '15px', fontWeight: '700' } }, [o.name || `#${t.tracker_id}`]),
                 el('div', { class: 'label', style: { color: INK_MUTE, marginTop: '2px' } }, [
                     [o.club, o.rating, o.strength_de ? `DE ${o.strength_de}` : null, o.strength_pool ? `pool ${o.strength_pool}` : null].filter(Boolean).join(' \u00b7 ')
-                ])
+                ]),
+                breakdown.length ? el('div', { class: 'label', style: { color: INK_MUTE, marginTop: '3px', display: 'flex', flexWrap: 'wrap', gap: '4px 10px' } },
+                    breakdown.map((b) => el('span', { style: b.c === cat ? { color: INK, fontWeight: '700' } : {} }, [`${catLabel(b.c)} ${b.med}% (${b.n})`]))) : null,
+                (() => {
+                    // Second line: this category plus higher ones scaled up, half weight.
+                    const sc = scaledById.get(t.tracker_id) || {};
+                    const has = [90, 180, 270, 365].some((d) => (sc[d]?.events_scaled || 0) > 0);
+                    if (!has) return null;
+                    const cells = [90, 180, 270, 365].map((d) => sc[d] ? `${sc[d].median_pct}%` : '—');
+                    const nUp = sc[365]?.events_scaled || 0;
+                    return el('div', { class: 'label', style: { color: INK_MUTE, marginTop: '3px' } }, [
+                        `With ${nUp} higher-category result${nUp === 1 ? '' : 's'} scaled up to ${catLabel(cat)} at half weight: ${cells.join(' · ')}`
+                    ]);
+                })()
             ]),
             ...[90, 180, 270, 365].map((d) => el('span', { class: 'num', style: { color: pctColor(m(d)), fontSize: '14px', textAlign: 'right', fontWeight: (m(d) != null && m(d) <= 15) ? '700' : '500' } }, [m(d) == null ? '\u2014' : `${m(d)}%`]))
         ]));
