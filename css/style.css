@@ -2711,6 +2711,8 @@ body {
     padding: 1px 7px; font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.1em;
     color: var(--ink);
 }
+.ft-tier-list { display: flex; flex-direction: column; margin-top: 6px; }
+.ft-tier-badge[class*="ft-tier-"] { background: none !important; color: var(--ink) !important; box-shadow: none; }
 .ft-tier-record, .ft-tier-pct { font-family: var(--mono); font-size: 12px; color: var(--ink); }
 .ft-tier-pct { color: #6B7280; margin-left: auto; }
 .ft-last5 { list-style: none; padding: 0; margin: 6px 0 0; }
