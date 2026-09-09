@@ -23,8 +23,16 @@ function parseCsv(text: string): string[][] {
 }
 const clean = (s: string) => s.replace(/&#39;|&apos;|&rsquo;|’/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
 
-Deno.serve(async () => {
-  const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+Deno.serve(async (req: Request) => {
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const db = createClient(Deno.env.get("SUPABASE_URL")!, serviceKey);
+  // Only the cron job (shared secret from app_secrets) or the service key.
+  const auth = req.headers.get("Authorization") || "";
+  if (auth !== `Bearer ${serviceKey}`) {
+    const given = req.headers.get("x-cron-secret") || "";
+    const { data: s } = await db.from("app_secrets").select("value").eq("name", "cron_secret").maybeSingle();
+    if (!given || !s?.value || given !== s.value) return new Response(JSON.stringify({ error: "not allowed" }), { status: 403, headers: { "Content-Type": "application/json" } });
+  }
   const { data: homes } = await db.from("household").select("owner_user_id,home_zip,home_address");
   const zips = [...new Set((homes || []).map((h) => h.home_zip || (String(h.home_address || "").match(/\b\d{5}\b/) || [])[0]).filter(Boolean))];
   const today = new Date().toISOString().slice(0, 10);

@@ -39,6 +39,17 @@ Deno.serve(async (req) => {
     const supa = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
         global: { headers: { Authorization: authHeader } }
     });
+    // The gateway only checks that the token is signed; the public anon key
+    // passes that. So: a real user, a member, the owner of this profile, and
+    // no more than 20 coaching calls per profile per day, before any
+    // Anthropic spend.
+    const { data: who } = await supa.auth.getUser();
+    if (!who?.user) return jsonResp({ error: 'sign in first' }, 401);
+    const { data: mine } = await supa.rpc('profile_belongs_to_me', { p_profile_id: profile_id });
+    if (!mine) return jsonResp({ error: 'not your fencer' }, 403);
+    const since = new Date(Date.now() - 864e5).toISOString();
+    const { count } = await supa.from('coach_notes').select('id', { count: 'exact', head: true }).eq('profile_id', profile_id).gte('created_at', since);
+    if ((count || 0) >= 20) return jsonResp({ error: 'daily coaching limit reached; try tomorrow' }, 429);
 
     try {
         let result: { text: string; promptSummary: any; model: string };

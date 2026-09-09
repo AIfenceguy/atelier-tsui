@@ -1,10 +1,14 @@
 // refresh-due — the daily job. Finds every event a member has registered, or
 // that is on the season calendar within the next 60 days, whose field has not
 // been read in the last 23 hours, and refreshes a few of them by calling
-// refresh-event with the service key. Called by pg_cron every 20 minutes in a
-// two-hour night window, so a busy calendar converges without any one call
-// running long. Needs no secret from the caller: it only ever refreshes events
-// already in the database, and each event is capped at once a day.
+// refresh-event with the service key. Called by pg_cron every 3 minutes in a
+// four-hour night window, so a busy calendar converges without any one call
+// running long.
+//
+// Only the cron job may call it: it sends the shared secret that lives in the
+// app_secrets table (generated inside the database, never in git), or the
+// service key for a manual run. Anyone else gets 403, so nobody can make this
+// project hammer FencingTracker on our name.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -15,10 +19,20 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const CALLS_PER_RUN = 2;
 const HORIZON_DAYS = 60;
 
-Deno.serve(async () => {
+Deno.serve(async (req: Request) => {
   const url = Deno.env.get("SUPABASE_URL")!;
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const db = createClient(url, serviceKey);
+
+  const auth = req.headers.get("Authorization") || "";
+  if (auth !== `Bearer ${serviceKey}`) {
+    const given = req.headers.get("x-cron-secret") || "";
+    const { data: s } = await db.from("app_secrets").select("value").eq("name", "cron_secret").maybeSingle();
+    if (!given || !s?.value || given !== s.value) {
+      return new Response(JSON.stringify({ error: "not allowed" }), { status: 403, headers: { "Content-Type": "application/json" } });
+    }
+  }
+
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
   const horizon = new Date(now.getTime() + HORIZON_DAYS * 864e5).toISOString().slice(0, 10);

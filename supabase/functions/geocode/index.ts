@@ -1,8 +1,9 @@
 // geocode — turn "Palm Springs, CA" or a home address into a point, once.
 //
 // Uses OpenStreetMap's Nominatim, which asks for an identifying User-Agent and
-// no more than one request a second. Every answer is cached in `places`, so a
-// city is looked up once for everyone and a home address once per family.
+// no more than one request a second. Every venue answer is cached in `places`,
+// so a city is looked up once for everyone. A home (a house number or a ZIP
+// in the query) is never cached: the family's own household row keeps it.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -27,7 +28,8 @@ Deno.serve(async (req) => {
   const key = q.toLowerCase().replace(/\s+/g, " ");
 
   const db = createClient(Deno.env.get("SUPABASE_URL")!, serviceKey);
-  const { data: hit } = await db.from("places").select("*").eq("key", key).maybeSingle();
+  const isHome = /^\d+\s/.test(key) || /\d{5}/.test(key);
+  const { data: hit } = isHome ? { data: null } : await db.from("places").select("*").eq("key", key).maybeSingle();
   if (hit && hit.lat != null) return json({ cached: true, ...hit });
 
   const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q=${encodeURIComponent(q)}`;
@@ -36,6 +38,6 @@ Deno.serve(async (req) => {
   const res = await r.json();
   const first = Array.isArray(res) && res[0];
   const row = { key, display_name: first ? String(first.display_name) : null, lat: first ? Number(first.lat) : null, lng: first ? Number(first.lon) : null, fetched_at: new Date().toISOString() };
-  await db.from("places").upsert(row);
+  if (!isHome) await db.from("places").upsert(row);
   return json({ cached: false, ...row });
 });
