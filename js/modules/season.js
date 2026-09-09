@@ -224,6 +224,7 @@ export async function mountSeason(root) {
     for (const [key, title, sub] of GROUPS) {
         const rows = events.filter((e) => e.group === key);
         if (!rows.length) continue;
+        if (key === 'registered' || key === 'considering') { body.appendChild(weekendsCard(key, title, sub, rows, ctx, refreshed)); continue; }
         let t = title, s = sub;
         if (key === 'addon' && sibling) {
             t = goals.pressure === 'development' ? `Along for the ride · with ${sibling.name}` : 'Only if already there';
@@ -484,6 +485,153 @@ function pointsPlanCard(profile, cat, rows, ctx) {
         grid.appendChild(num(Math.round(P(s.ev)).toString() + (elite ? ` (${Math.round(elite)})` : ''), P(s.ev) >= 30 ? GOOD : INK, '18px'));
     }
     wrap.appendChild(grid);
+    return wrap;
+}
+
+// ---------------------------------------------------------------------------
+// A weekend he is going to (or weighing): every event there he is eligible
+// for, what each would pay, and which standings each result feeds. A Junior
+// entry is a Junior result and a Y14 result at once; that is the whole point
+// of entering everything at a NAC.
+// ---------------------------------------------------------------------------
+const BIRTH = { y12: [2014, 2017], y14: [2012, 2015], cadet: [2010, 2015], junior: [2007, 2013], div1: [1900, 2013] };
+function eligible(cat, profile) {
+    const by = profile.birth_year; if (!by) return true;
+    const [lo, hi] = BIRTH[cat] || [1900, 2100];
+    if (by < lo || by > hi) return false;
+    if (cat === 'div1') return /^[ABC]/i.test(String(profile.rating || ''));
+    return true;
+}
+function countsToward(e) {
+    const nat = NATIONAL.has(e.tier);
+    switch (e.category) {
+        case 'y12': return ['Y12'];
+        case 'y14': return ['Y14'];
+        case 'cadet': return nat ? ['Cadet', 'Y14'] : (REGIONAL_CADET_COUNTS_FOR_Y14 ? ['Cadet', 'Y14'] : ['Cadet']);
+        case 'junior': return nat ? ['Junior', 'Y14'] : ['Junior'];
+        case 'div1': return nat ? ['Division I', 'Y14'] : ['Division I'];
+        default: return [];
+    }
+}
+
+function weekendsCard(key, title, sub, rows, ctx, refreshed) {
+    const name = ctx.profile.name;
+    const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
+    // Group the decided events by weekend, then pull in every other event at
+    // that tournament so the parent sees what else he could enter.
+    const weekends = new Map();
+    for (const e of rows) {
+        const k = e.tournament + '|' + String(e.start_date).slice(0, 7);
+        if (!weekends.has(k)) weekends.set(k, { tournament: e.tournament, city: e.city, venue: e.venue, travel: e.travel, start: e.start_date, end: e.end_date, decided: [], all: [] });
+        weekends.get(k).decided.push(e);
+    }
+    for (const w of weekends.values()) {
+        w.all = ctx.events.filter((x) => x.tournament === w.tournament && String(x.start_date).slice(0, 7) === String(w.start).slice(0, 7))
+            .sort((a, b) => String(a.start_date).localeCompare(String(b.start_date)) || catRank(a.category) - catRank(b.category));
+        w.start = w.all.reduce((m, x) => x.start_date < m ? x.start_date : m, w.start);
+        w.end = w.all.reduce((m, x) => (x.end_date || x.start_date) > (m || '') ? (x.end_date || x.start_date) : m, w.end);
+    }
+    const list = [...weekends.values()].sort((a, b) => String(a.start).localeCompare(String(b.start)));
+    wrap.appendChild(label(`${list.length} weekend${list.length > 1 ? 's' : ''}`));
+    wrap.appendChild(serif(title, '24px'));
+    wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '13px', margin: '4px 0 6px', lineHeight: '1.5' } }, [sub]));
+
+    for (const w of list) {
+        const card = el('div', { style: { padding: '12px 0', borderTop: '1px solid var(--rule)' } });
+        const cost = w.decided[0].cost || {};
+        card.appendChild(el('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' } }, [
+            el('div', { style: { fontFamily: 'var(--serif)', fontStyle: 'italic', fontWeight: '700', fontSize: '20px', color: INK } }, [w.tournament]),
+            el('span', { class: 'label', style: { color: INK_MUTE } }, [`${fmtRange(w.start, w.end)} · ${w.city || 'city not set'} · ${w.travel === 'fly' ? 'fly' : w.travel === 'drive' ? 'drive' : w.travel === 'local' ? 'day trip' : ''}`])
+        ]));
+        card.appendChild(el('div', { style: { display: 'flex', gap: '14px', flexWrap: 'wrap', margin: '6px 0 8px' } }, [
+            stat('Per person', cost.per_person > 0 ? money(cost.per_person) : '—', cost.live ? GOOD : INK),
+            stat('Nights', cost.nights ?? '—'),
+            stat(w.travel === 'fly' ? 'Fare, return' : 'Driving', w.travel === 'fly' ? money((cost.flight_pp || 0) * 2) : money(cost.drive || 0)),
+            stat('Points, all his events', w.decided.reduce((a, e) => a + (e.projections[name]?.points_exp || 0), 0).toFixed(0), GOOD)
+        ]));
+
+        // The events table: eligible or not, counts toward what, what it pays.
+        const grid = el('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1.3fr) minmax(0, 1fr) 58px 56px 70px 78px', columnGap: '8px', rowGap: '6px', alignItems: 'baseline' } });
+        const head = (t, right) => el('span', { class: 'label', style: { color: INK_MUTE, textAlign: right ? 'right' : 'left' } }, [t]);
+        ['Event', 'Counts toward', "He'd start", 'Top 8', 'Points', ''].forEach((t, i) => grid.appendChild(head(t, i >= 2 && i <= 4)));
+        for (const e of w.all) {
+            const p = e.projections[name];
+            const ok = eligible(e.category, ctx.profile);
+            const st = ctx.decision(e);
+            const onPlan = e.category === ctx.primary || (ctx.goals.secondary || []).includes(e.category) || (ctx.goals.ride_along || []).includes(e.category);
+            const pts = p?.points_exp;
+            const elite = p?.points_exp_if_elite;
+            const tone = st === 'going' ? GOOD : !ok ? INK_MUTE : INK;
+            grid.appendChild(el('div', { style: { minWidth: 0 } }, [
+                el('div', { style: { color: tone, fontSize: '14px', fontWeight: st === 'going' ? '700' : '500' } }, [`${catLabel(e.category)}`, el('span', { class: 'label', style: { color: INK_MUTE, marginLeft: '6px' } }, [fmtDay(e.start_date).replace(/^\w+, /, '')])]),
+                el('div', { class: 'label', style: { color: st === 'going' ? GOOD : st === 'considering' ? WARN : INK_MUTE } }, [st === 'going' ? 'Entered' : st === 'considering' ? 'Considering' : !ok ? 'Not eligible' : onPlan ? 'Could add' : 'Eligible, not on his plan'])
+            ]));
+            grid.appendChild(el('span', { style: { color: ok ? INK : INK_MUTE, fontSize: '13px' } }, [countsToward(e).join(' + ') || '—']));
+            grid.appendChild(el('span', { class: 'num', style: { color: INK, fontSize: '13px', textAlign: 'right' } }, [p && ok ? `${p.seed_form}/${p.field_n}` : '—']));
+            grid.appendChild(el('span', { class: 'num', style: { color: INK, fontSize: '13px', textAlign: 'right' } }, [p && ok ? pct(p.p8) : '—']));
+            grid.appendChild(el('span', { class: 'num', style: { color: pts >= 25 ? GOOD : INK, fontSize: '13px', textAlign: 'right', fontWeight: '600' } }, [p && ok && pts != null ? `${Math.round(pts)}${elite ? ` (${Math.round(elite)})` : ''}` : '—']));
+            const cell = el('span', { style: { textAlign: 'right' } });
+            if (ok && st !== 'going') {
+                const b = el('button', { class: 'btn btn-ghost btn-sm btn-mono-label' }, [st === 'considering' ? 'Going' : 'Add']);
+                b.onclick = async () => {
+                    b.disabled = true;
+                    try {
+                        await safeWrite({ table: 'member_events', op: 'upsert', onConflict: 'profile_id,season_event_id', payload: { profile_id: ctx.profile.id, season_event_id: e.id, ft_event_id: e.ft_event_id || null, category: e.category, tournament: e.tournament, event_date: e.start_date, status: 'going' } });
+                        location.reload();
+                    } catch (err) { b.disabled = false; toast('Could not save: ' + (err.message || err), 'error'); }
+                };
+                cell.appendChild(b);
+            } else if (st === 'going') {
+                const b = el('button', { class: 'btn btn-ghost btn-sm btn-mono-label', title: 'Move to considering' }, ['Undo']);
+                b.onclick = async () => {
+                    b.disabled = true;
+                    try {
+                        await safeWrite({ table: 'member_events', op: 'update', match: { profile_id: ctx.profile.id, season_event_id: e.id }, payload: { status: 'considering' } });
+                        location.reload();
+                    } catch (err) { b.disabled = false; toast('Could not save: ' + (err.message || err), 'error'); }
+                };
+                cell.appendChild(b);
+            }
+            grid.appendChild(cell);
+        }
+        card.appendChild(grid);
+        card.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '8px 0 0', lineHeight: '1.5' } }, [
+            'Points are on the Challenger table at a NAC, Elite in brackets. Counts toward shows every standings list the result feeds: a national Cadet, Junior or Division I result is also a Y14 result.'
+        ]));
+
+        // Odds and the registered field for each entered event, folded.
+        for (const e of w.decided) {
+            const p = e.projections[name];
+            if (!p || p.pending) continue;
+            const det = el('div', { style: { marginTop: '8px' } });
+            const btn = el('button', { class: 'btn btn-ghost btn-sm btn-mono-label' }, [`${catLabel(e.category)} · odds and the field`]);
+            const inner = el('div', { hidden: true, style: { marginTop: '6px' } });
+            inner.appendChild(el('div', { style: { display: 'flex', gap: '14px', flexWrap: 'wrap' } }, [
+                stat('Fencers', `${e.entrants ?? p.field_n ?? '—'}`),
+                stat("He'd start", ordinal(p.seed_form)),
+                stat('Likely', ordinal(Math.round(p.median || p.exp))),
+                ...(p.field_n > 64 ? [stat('Top 64', pct(p.p64))] : []),
+                ...(p.field_n > 32 ? [stat('Top 32', pct(p.p32))] : []),
+                stat('Top 16', pct(p.p16)), stat('Top 8', pct(p.p8)), stat('Top 4', pct(p.p4))
+            ]));
+            if (p.field_list?.length) inner.appendChild(fieldList(p, ctx));
+            else inner.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '6px 0 0' } }, ['The registered field for this event is read overnight; names and odds appear once it has been.']));
+            btn.onclick = () => { inner.hidden = !inner.hidden; };
+            det.appendChild(btn); det.appendChild(inner);
+            card.appendChild(det);
+        }
+        if (w.decided.some((e) => e.ft_event_id)) {
+            const e = w.decided.find((x) => x.ft_event_id);
+            const rb = el('button', { class: 'btn btn-ghost btn-sm btn-mono-label', style: { marginTop: '6px' } }, [refreshed.has(Number(e.ft_event_id)) ? 'Re-read the field' : 'Read the live field']);
+            rb.onclick = async () => {
+                rb.disabled = true; rb.textContent = 'Reading…';
+                try { for (const x of w.decided.filter((y) => y.ft_event_id)) await refreshEvent(Number(x.ft_event_id), (msg) => { rb.textContent = msg; }, refreshed.has(Number(x.ft_event_id))); location.reload(); }
+                catch (err) { rb.disabled = false; rb.textContent = 'Read the live field'; toast('Could not read: ' + (err.message || err), 'error'); }
+            };
+            card.appendChild(rb);
+        }
+        wrap.appendChild(card);
+    }
     return wrap;
 }
 
