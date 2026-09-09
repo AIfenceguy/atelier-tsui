@@ -21,6 +21,7 @@ import { activeProfile } from '../lib/state.js';
 import { safeWrite } from '../lib/offline.js';
 import { forecast, tierOf, categoryOf } from '../lib/season-model.js';
 import { estimateTrip, withLiveFare, milesBetween } from '../lib/trip-cost.js';
+import { canSeeSeason, canSeeCosts, isParent } from '../lib/visibility.js';
 
 const INK = 'var(--ink)';
 // Literal: var(--ink-mute) composites below AA on the cream surface.
@@ -67,6 +68,9 @@ const serif = (text, size = '26px', color = INK) => el('div', {
 const num = (text, color = INK, size = '20px') =>
     el('span', { class: 'num', style: { color, fontSize: size, fontWeight: '600' } }, [text]);
 const money = (n) => n == null ? '—' : '$' + Math.round(n).toLocaleString();
+// Set per mount from the parent's Settings: show money, allow changes.
+let COSTS = true;
+let PARENT = true;
 const day = (iso) => new Date(String(iso).slice(0, 10) + 'T00:00:00');
 const fmtDay = (iso) => day(iso).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 const fmtRange = (a, b) => (!b || b === a) ? fmtDay(a)
@@ -113,6 +117,15 @@ export async function mountSeason(root) {
         el('h1', { class: 'page-eyebrow' }, ['Season Plan']),
         el('div', { class: 'today-sub' }, [el('span', {}, [profile.name.toUpperCase()])])
     ]));
+    // A kid's login sees the plan only if the parent switched it on in
+    // Settings, and sees costs only if the parent allows that too. The
+    // database enforces both; this just keeps the screen honest.
+    if (!canSeeSeason()) {
+        root.appendChild(el('div', { class: 'empty' }, [el('p', { class: 'empty-line' }, ['Competition planning is on the parent\'s account.'])]));
+        return;
+    }
+    COSTS = canSeeCosts();
+    PARENT = isParent();
     const body = el('div', {});
     root.appendChild(body);
     body.appendChild(el('div', { class: 'empty' }, [el('p', { class: 'empty-line' }, ['Reading the fields…'])]));
@@ -219,8 +232,10 @@ export async function mountSeason(root) {
     body.appendChild(primerCard(goals));
     const planCats = [ctx.primary, ...(goals.secondary || [])].filter((c, i, a) => c && a.indexOf(c) === i && events.some((e) => e.category === c));
     for (const cat of planCats) body.appendChild(pointsPlanCard(profile, cat, events.filter((e) => e.category === cat), ctx));
-    body.appendChild(rankedCalendar(events, ctx, true));
-    body.appendChild(rankedCalendar(events, ctx, false));
+    if (COSTS) {
+        body.appendChild(rankedCalendar(events, ctx, true));
+        body.appendChild(rankedCalendar(events, ctx, false));
+    }
     body.appendChild(await localEventsCard(profile, homeRes.data));
     for (const [key, title, sub] of GROUPS) {
         const rows = events.filter((e) => e.group === key);
@@ -237,7 +252,7 @@ export async function mountSeason(root) {
     }
     body.appendChild(await peersCard(profile, events));
     body.appendChild(howToRead(profile, sibling));
-    body.appendChild(addEventCard(profile));
+    if (PARENT) body.appendChild(addEventCard(profile));
     body.appendChild(recentBouts(boutRes.data || [], profile));
 }
 
@@ -282,9 +297,9 @@ function verdict(e, ctx) {
     const g = e.group;
     if (p.pending) return { word: 'Reading', tone: INK_MUTE, why: 'The field has not been read yet.' };
     if (g === 'registered') return { word: 'Going', tone: GOOD, why: `On today's field he would start ${ordinal(p.seed_form)} of ${p.field_n}, likely ${ordinal(Math.round(p.median || p.exp))}, about ${Math.round(pts)} points${add != null ? `, ${Math.round(add)} of them new to his total` : ''}.` };
-    if (g === 'considering') return { word: 'Considering', tone: INK, why: `If you go: he would start ${ordinal(p.seed_form)} of ${p.field_n}, likely ${ordinal(Math.round(p.median || p.exp))}, about ${Math.round(pts)} points${add != null ? `, ${Math.round(add)} of them new to his total` : ''}, for ${money(cost.per_person ?? cost.total)} per person.` };
+    if (g === 'considering') return { word: 'Considering', tone: INK, why: `If you go: he would start ${ordinal(p.seed_form)} of ${p.field_n}, likely ${ordinal(Math.round(p.median || p.exp))}, about ${Math.round(pts)} points${add != null ? `, ${Math.round(add)} of them new to his total` : ''}${COSTS ? `, for ${money(e.cost?.per_person ?? cost)} per person` : ''}.` };
     if (g === 'anchor') return { word: 'Family trip', tone: GOOD, why: `A national event that fills one of his counted slots: about ${Math.round(pts)} points${add != null && add < pts - 1 ? `, of which ${Math.round(add)} actually raise his total` : ''}.` };
-    if (g === 'value') return { word: 'Go', tone: GOOD, why: add != null && add > 0 ? `Adds about ${Math.round(add)} points to his ranking total for ${money(cost)} and ${travel}.` : `About ${Math.round(pts)} points on the day for ${money(cost)} and ${travel}.` };
+    if (g === 'value') return { word: 'Go', tone: GOOD, why: add != null && add > 0 ? `Adds about ${Math.round(add)} points to his ranking total for ${COSTS ? `${money(cost)} and ` : ''}${travel}.` : `About ${Math.round(pts)} points on the day for ${COSTS ? `${money(cost)} and ` : ''}${travel}.` };
     if (g === 'confidence') return { word: 'Go if it suits', tone: INK, why: `No national points here. He would start ${ordinal(p.seed_form)} of ${p.field_n}: a weekend of winning, which is worth something on its own.` };
     if (g === 'challenge') return { word: 'Optional', tone: INK, why: `Development, not points. He would start ${ordinal(p.seed_form)} of ${p.field_n} and learn from the bouts he loses.` };
     if (g === 'addon') return { word: 'Only if already there', tone: INK, why: `${add ? `Adds about ${Math.round(add)} points` : `About ${Math.round(pts)} points on the day`} for an entry${e.travel === 'fly' ? ' and a fare' : ''}, because the family is at this venue anyway.` };
@@ -298,8 +313,8 @@ function verdict(e, ctx) {
     if (playingUp && formDown) return { word: 'Skip', tone: BAD, why: `Playing up while he is losing ${ctx.ts90.losses_vs_weaker} of ${ctx.ts90.vs_weaker} bouts to weaker fencers. A bracket of losses, not points.` };
     if (e.tier === 'syc' && !sycAllowed(e, ctx)) return { word: 'Skip', tone: BAD, why: `Family rule: local SYCs only (${(ctx.goals.allowed_syc || []).join(', ')}). ${Math.round(pts)} points on the day, but a flight for a result the local ones can give.` };
     if (e.tier === 'syc' && pts >= 20) return { word: 'Skip', tone: BAD, why: `Only one SYC counts and a better one is on the plan. Adds ${Math.round(add || 0)} to his total, whatever he scores on the day.` };
-    if (e.tier === 'ryc') return { word: 'Skip', tone: BAD, why: `Regional youth events pay no national points, and this one is ${travel}${cost ? ` for ${money(cost)}` : ''}.` };
-    if (pts >= 8 && cost > 0) return { word: 'Skip', tone: BAD, why: `${Math.round(pts)} points for ${money(cost)} and ${travel}. The drives on the plan pay three times better.` };
+    if (e.tier === 'ryc') return { word: 'Skip', tone: BAD, why: `Regional youth events pay no national points, and this one is ${travel}${cost && COSTS ? ` for ${money(cost)}` : ''}.` };
+    if (pts >= 8 && cost > 0) return { word: 'Skip', tone: BAD, why: `${Math.round(pts)} points for ${COSTS ? `${money(cost)} and ` : ''}${travel}. The drives on the plan pay three times better.` };
     return { word: 'Skip', tone: BAD, why: `Nothing here moves his ranking: he would finish around ${ordinal(Math.round(p.median || p.exp || 0))} of ${p.field_n}.` };
 }
 
@@ -545,9 +560,11 @@ function weekendsCard(key, title, sub, rows, ctx, refreshed) {
             el('span', { class: 'label', style: { color: INK_MUTE } }, [`${fmtRange(w.start, w.end)} · ${w.city || 'city not set'} · ${w.travel === 'fly' ? 'fly' : w.travel === 'drive' ? 'drive' : w.travel === 'local' ? 'day trip' : ''}`])
         ]));
         card.appendChild(el('div', { style: { display: 'flex', gap: '14px', flexWrap: 'wrap', margin: '6px 0 8px' } }, [
-            stat('Per person', cost.per_person > 0 ? money(cost.per_person) : '—', cost.live ? GOOD : INK),
-            stat('Nights', cost.nights ?? '—'),
-            stat(w.travel === 'fly' ? 'Fare, return' : 'Driving', w.travel === 'fly' ? money((cost.flight_pp || 0) * 2) : money(cost.drive || 0)),
+            ...(COSTS ? [
+                stat('Per person', cost.per_person > 0 ? money(cost.per_person) : '—', cost.live ? GOOD : INK),
+                stat('Nights', cost.nights ?? '—'),
+                stat(w.travel === 'fly' ? 'Fare, return' : 'Driving', w.travel === 'fly' ? money((cost.flight_pp || 0) * 2) : money(cost.drive || 0))
+            ] : [stat('Nights', cost.nights ?? '—')]),
             stat('Points, all his events', w.decided.reduce((a, e) => a + (e.projections[name]?.points_exp || 0), 0).toFixed(0), GOOD)
         ]));
 
@@ -572,7 +589,7 @@ function weekendsCard(key, title, sub, rows, ctx, refreshed) {
             grid.appendChild(el('span', { class: 'num', style: { color: INK, fontSize: '13px', textAlign: 'right' } }, [p && ok ? pct(p.p8) : '—']));
             grid.appendChild(el('span', { class: 'num', style: { color: pts >= 25 ? GOOD : INK, fontSize: '13px', textAlign: 'right', fontWeight: '600' } }, [p && ok && pts != null ? `${Math.round(pts)}${elite ? ` (${Math.round(elite)})` : ''}` : '—']));
             const cell = el('span', { style: { textAlign: 'right' } });
-            if (ok && st !== 'going') {
+            if (ok && st !== 'going' && PARENT) {
                 const b = el('button', { class: 'btn btn-ghost btn-sm btn-mono-label' }, [st === 'considering' ? 'Going' : 'Add']);
                 b.onclick = async () => {
                     b.disabled = true;
@@ -582,7 +599,7 @@ function weekendsCard(key, title, sub, rows, ctx, refreshed) {
                     } catch (err) { b.disabled = false; toast('Could not save: ' + (err.message || err), 'error'); }
                 };
                 cell.appendChild(b);
-            } else if (st === 'going') {
+            } else if (st === 'going' && PARENT) {
                 const b = el('button', { class: 'btn btn-ghost btn-sm btn-mono-label', title: 'Move to considering' }, ['Undo']);
                 b.onclick = async () => {
                     b.disabled = true;
@@ -621,7 +638,7 @@ function weekendsCard(key, title, sub, rows, ctx, refreshed) {
             det.appendChild(btn); det.appendChild(inner);
             card.appendChild(det);
         }
-        if (w.decided.some((e) => e.ft_event_id)) {
+        if (PARENT && w.decided.some((e) => e.ft_event_id)) {
             const e = w.decided.find((x) => x.ft_event_id);
             const rb = el('button', { class: 'btn btn-ghost btn-sm btn-mono-label', style: { marginTop: '6px' } }, [refreshed.has(Number(e.ft_event_id)) ? 'Re-read the field' : 'Read the live field']);
             rb.onclick = async () => {
@@ -791,24 +808,26 @@ function eventRow(e, i, ctx, refreshed, group) {
             stat('Points on the day', p.points_exp == null ? '—' : pts.toFixed(0), pts >= 25 ? GOOD : INK),
             ...(add != null ? [stat('Adds to ranking', add.toFixed(0), add >= 20 ? GOOD : add === 0 ? BAD : INK)] : [])
         ];
-        if (group === 'addon' && cost.marginal != null) stats.push(stat('His cost', money(cost.marginal), GOOD));
-        else stats.push(stat('Per person', cost.per_person > 0 ? money(cost.per_person) : '—', cost.live ? GOOD : INK));
-        if (group === 'value' || group === 'anchor' || decided) stats.push(stat('Points per $100', ppd == null ? '—' : ppd.toFixed(1), ppd >= 5 ? GOOD : INK));
+        if (COSTS) {
+            if (group === 'addon' && cost.marginal != null) stats.push(stat('His cost', money(cost.marginal), GOOD));
+            else stats.push(stat('Per person', cost.per_person > 0 ? money(cost.per_person) : '—', cost.live ? GOOD : INK));
+            if (group === 'value' || group === 'anchor' || decided) stats.push(stat('Points per $100', ppd == null ? '—' : ppd.toFixed(1), ppd >= 5 ? GOOD : INK));
+        }
         row.appendChild(el('div', { style: { display: 'flex', gap: '14px', flexWrap: 'wrap', marginTop: '2px' } }, stats));
         // The registered field, strongest first, with his chance in one bout.
         if (decided && p.field_list?.length) row.appendChild(fieldList(p, ctx));
     }
     const note = [];
-    if (group === 'addon' && ctx.sibling) note.push(`${ctx.sibling.name} is going. ${e.travel === 'fly' ? `Add his fare, about ${money(cost.flight_pp * 2)} return,` : 'No extra travel,'} plus the entry.`);
+    if (group === 'addon' && ctx.sibling) note.push(`${ctx.sibling.name} is going. ${e.travel === 'fly' ? `Add his fare${COSTS ? `, about ${money(cost.flight_pp * 2)} return` : ''},` : 'No extra travel,'} plus the entry.`);
     if (e.tier === 'syc' && (e.category === 'y12' || e.category === 'y14') && pts >= 20) {
         const keep = ctx.events.filter((x) => ctx.sycKeep.has(x.id) && x.category === e.category);
         if (keep[0] === e) note.push('The SYC that counts, on today\'s fields and prices.');
         else if (keep.length && keep[1] === e) note.push(`Only one SYC counts; ${keep[0].tournament} is the first choice. This one is the backup if that weekend goes badly.`);
         else if (keep.length) note.push(`Only one SYC counts and ${keep[0].tournament} is the better bet. Real points here, but they would replace, not add.`);
     }
-    if (cost.live) note.push(`Fare is live from the Travel screen: ${money(cost.flight_pp)} per person each way.`);
-    else if (e.travel === 'fly' && group !== 'addon') note.push(`Fare estimated at ${money(cost.flight_pp)} per person one way.`);
-    if (cost.nights && group !== 'addon') note.push(`${cost.nights} night${cost.nights > 1 ? 's' : ''} at ${money(cost.hotel_night)}.`);
+    if (COSTS && cost.live) note.push(`Fare is live from the Travel screen: ${money(cost.flight_pp)} per person each way.`);
+    else if (COSTS && e.travel === 'fly' && group !== 'addon') note.push(`Fare estimated at ${money(cost.flight_pp)} per person one way.`);
+    if (COSTS && cost.nights && group !== 'addon') note.push(`${cost.nights} night${cost.nights > 1 ? 's' : ''} at ${money(cost.hotel_night)}.`);
     if (p.live && p.trend) {
         const bits = Object.entries(p.trend).filter(([, v]) => v).map(([k, v]) => `${v} ${k}`);
         if (bits.length) note.push(`Registered field on their 90-day trend: ${bits.join(', ')}.`);
@@ -827,7 +846,7 @@ function eventRow(e, i, ctx, refreshed, group) {
             ].filter(Boolean));
         })));
     }
-    if (e.ft_event_id && group !== 'skip') {
+    if (PARENT && e.ft_event_id && group !== 'skip') {
         const rb = el('button', { class: 'btn btn-ghost btn-sm btn-mono-label', style: { marginTop: '6px', justifySelf: 'start' } }, [refreshed.has(Number(e.ft_event_id)) ? 'Re-read the field' : 'Read the live field']);
         rb.onclick = async () => {
             rb.disabled = true; rb.textContent = 'Reading…';
@@ -1075,9 +1094,11 @@ function howToRead(profile, sibling) {
             el('b', {}, ['Seed']), ' is his place in that field on form strength, official seed in brackets; ', el('b', {}, ['by pools']), ' is where his pool strength would draw him. ',
             el('b', {}, ['Expected']), ' is the median finish of a simulated bracket. ',
             el('b', {}, ['Points']), ' are national points for that finish under the 2026-27 tables, weighted by how likely each finish is. ',
-            el('b', {}, ['Per person']), ` is a return fare, half a hotel room per night, the entry and half the driving from ${HOME?.city || 'home'}; multiply by who is going. A live fare from the Travel screen replaces the estimate. `,
-            AIRPORTS.length ? `Airports within 75 minutes of home: ${AIRPORTS.map((a) => `${a.code} ${a.miles} mi`).join(', ')}. ` : '',
-            sibling ? `Where ${sibling.name} is going anyway, ${profile.name}'s cost is shown as his fare and entry only. ` : '',
+            ...(COSTS ? [
+                el('b', {}, ['Per person']), ` is a return fare, half a hotel room per night, the entry and half the driving from ${HOME?.city || 'home'}; multiply by who is going. A live fare from the Travel screen replaces the estimate. `,
+                AIRPORTS.length ? `Airports within 75 minutes of home: ${AIRPORTS.map((a) => `${a.code} ${a.miles} mi`).join(', ')}. ` : '',
+                sibling ? `Where ${sibling.name} is going anyway, ${profile.name}'s cost is shown as his fare and entry only. ` : ''
+            ] : []),
             'Cadet regionals count toward national points this season. Youth RYCs do not; only SYCs and NACs do, and only one SYC counts.'
         ])
     ]);

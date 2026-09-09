@@ -17,7 +17,13 @@
 .bottom-nav:not(.is-expanded) a[data-route='lessons'],
 .bottom-nav:not(.is-expanded) a[data-route='videos'],
 .bottom-nav:not(.is-expanded) a[data-route='style'],
-.bottom-nav:not(.is-expanded) a[data-route='insight'] { display: none; }
+.bottom-nav:not(.is-expanded) a[data-route='insight'],
+.bottom-nav:not(.is-expanded) a[data-route='settings'] { display: none; }
+/* What the parent allows a kid's login to see (set in Settings, stamped on
+   <body> by lib/visibility.js). Settings itself is parent-only. */
+body[data-parent='0'] .bottom-nav a[data-route='settings'],
+body[data-see-season='0'] .bottom-nav a[data-route='season'],
+body[data-see-travel='0'] .bottom-nav a[data-route='travel'] { display: none !important; }
 /* Parent: Travel up front, Train folded away. Fencer: the reverse. */
 body[data-active-role='parent'] .bottom-nav:not(.is-expanded) a[data-route='train'] { display: none; }
 body:not([data-active-role='parent']) .bottom-nav:not(.is-expanded) a[data-route='travel'] { display: none; }

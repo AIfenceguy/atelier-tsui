@@ -14,6 +14,7 @@ import { getState } from '../lib/state.js';
 import { activeProfile } from '../lib/state.js';
 import { safeWrite } from '../lib/offline.js';
 import { homeCard } from '../lib/home-card.js';
+import { canSeeTravel } from '../lib/visibility.js';
 
 const INK = 'var(--ink, #1A1D24)';
 // Literal, not var(--ink-mute): that token composites to ~3.1:1 on white.
@@ -84,7 +85,12 @@ export async function mountTravel(root) {
         el('span', { class: 'meta' }, [profile?.name || ''])
     ]));
 
-    // Parent-only: the boys' views stay about fencing.
+    // The parent plans travel. A kid's login sees this only if the parent
+    // switched the flight tracker on for kids in Settings.
+    if (!canSeeTravel()) {
+        root.appendChild(el('div', { class: 'empty' }, ['Travel is on the parent\'s account.']));
+        return;
+    }
     if (profile && profile.role !== 'parent') {
         root.appendChild(el('div', { class: 'empty' }, ['Switch to the Parent profile to plan travel.']));
         return;

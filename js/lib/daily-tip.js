@@ -18,6 +18,7 @@ const GOOD = '#1f7a1f';
 const day = (iso) => new Date(String(iso).slice(0, 10) + 'T00:00:00');
 const daysUntil = (iso) => Math.round((day(iso) - day(new Date().toISOString())) / 864e5);
 const fmt = (iso) => day(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+import { canSeeCosts } from './visibility.js';
 const money = (n) => '$' + Math.round(n).toLocaleString();
 
 // The best-value weekend for this fencer, the same way the Season screen ranks them.
@@ -77,7 +78,7 @@ export async function pickDailyTip(profile) {
         return {
             tone: INK,
             headline: `Enter ${name} for ${place(soon)} now. ${soon.tournament}, ${fmt(soon.start)}.`,
-            reason: `${daysUntil(soon.start)} days away, ${soon.travel === 'fly' ? 'a flight' : 'a drive'}. About ${Math.round(soon.pts)} national points expected for roughly ${money(soon.cost)}, the best value inside the next month. Regional entries usually close about a week before.`,
+            reason: `${daysUntil(soon.start)} days away, ${soon.travel === 'fly' ? 'a flight' : 'a drive'}. About ${Math.round(soon.pts)} national points expected${canSeeCosts() ? ` for roughly ${money(soon.cost)}` : ''}, the best value inside the next month. Regional entries usually close about a week before.`,
             href: '#season'
         };
     }

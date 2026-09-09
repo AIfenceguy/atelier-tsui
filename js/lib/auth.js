@@ -4,6 +4,7 @@
 import { supa, isConfigured } from './supa.js';
 import { setState, getState } from './state.js';
 import { REDIRECT_TO } from './config.js';
+import { loadVisibility } from './visibility.js';
 
 export async function loadSession() {
     if (!isConfigured()) {
@@ -86,6 +87,9 @@ export async function loadOrCreateProfiles(userId) {
     if (error) throw error;
 
     const profiles = existing || [];
+    // What this login may see: the parent sees everything, a kid sees his own
+    // fencer plus whichever screens the parent switched on in Settings.
+    await loadVisibility();
 
     // Deliberately NOT auto-creating profiles for an unrecognised account.
     //
