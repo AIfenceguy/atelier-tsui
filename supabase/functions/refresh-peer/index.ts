@@ -22,8 +22,9 @@ function parseProfile(html: string, today: Date) {
   const name = clean((html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/) || [, ""])[1]).replace(/\s*Verified\s*$/i, "");
   const by = html.match(/person-hero__birth-year">(\d{4})</);
   const club = html.match(/person-hero__club-link"[^>]*>([^<]+)</);
-  const rh = html.match(/Rating history[\s\S]*?<tbody>([\s\S]*?)<\/tbody>/);
-  const rating = rh ? (rh[1].match(/<td>([A-EU]\d{0,2})<\/td>/) || [])[1] || null : null;
+  // Rating rows carry a search attribute like 'ratingFoil B26 Mar 18, 2026'.
+  const rm = html.match(/data-ranking-search="rating(?:Foil|Épée|Epee|Saber|Sabre)\s+([A-EU]\d{0,2})/);
+  const rating = rm ? rm[1] : null;
   const re = /<tr data-ranking-search="[^"]*">\s*<td class="ranking-table__numeric" data-ranking-value="(\d{8})">[^<]*<\/td>\s*<td>([^<]*)<\/td>\s*<td class="person-summary__event-cell">\s*<a href="\/event\/\d+\/results" title="([^"]*)">[^<]*<\/a>\s*<\/td>\s*<td class="ranking-table__numeric" data-ranking-value="\d+">\s*(\d+)\s*\/\s*(\d+)\s*<\/td>/g;
   const cut = new Date(today.getTime() - 365 * 864e5).toISOString().slice(0, 10);
   const results: { d: string; tournament: string; event: string; place: number; field: number }[] = [];
@@ -85,9 +86,16 @@ Deno.serve(async (req) => {
   try {
     const ph = await page(`https://fencingtracker.com/p/${tid}/x`);
     const prof = parseProfile(ph, now);
-    await sleep(DELAY_MS);
+    // The Registrations tab is only served to logged-in FencingTracker users,
+    // so his registrations come from the entry lists this app has already
+    // read (ft_event_entrants), joined to the season calendar.
     let registrations: unknown[] = [];
-    try { registrations = parseRegistrations(await page(`https://fencingtracker.com/p/${tid}/x/registrations`)); } catch (_) { /* none */ }
+    const { data: ents } = await db.from("ft_event_entrants").select("ft_event_id").eq("tracker_id", tid);
+    const evIds = (ents || []).map((x) => Number(x.ft_event_id));
+    if (evIds.length) {
+      const { data: evs } = await db.from("season_events").select("ft_event_id,tournament,start_date,category,event_code").in("ft_event_id", evIds);
+      registrations = (evs || []).map((e) => ({ d: e.start_date, tournament: e.tournament, event: e.event_code || e.category })).sort((a, b) => String(a.d).localeCompare(String(b.d)));
+    }
     await sleep(DELAY_MS);
     let strength = {};
     try { strength = parseStrength(await page(`https://fencingtracker.com/p/${tid}/x/strength`)); } catch (_) { /* none */ }
