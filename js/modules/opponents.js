@@ -21,6 +21,11 @@ import {
 // screen matches the rest of the site; the data is left as it is.
 const noEmoji = (t) => String(t ?? '').replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, '').replace(/^\s+/, '');
 import { opponentProfiler, listCoachNotes } from '../lib/coach.js';
+import { renderMeetingsCard, recordsByTracker } from '../lib/lost-bouts.js';
+
+// Win-loss record against each opponent from the competition results, keyed
+// by tracker id; filled by the list screen before the cards render.
+let RECORDS = new Map();
 
 const ARCHETYPES = [
     { slug: 'aggressive',   label: 'Aggressive' },
@@ -56,6 +61,8 @@ export async function mountOpponentsList(root) {
     catch (e) {
         return root.appendChild(el('div', { class: 'card', style: { color: 'var(--loss)', margin: '0 var(--gut)' } }, [`Failed to load: ${e.message}`]));
     }
+    try { RECORDS = await recordsByTracker(profile, opps.map((o) => o.tracker_id)); }
+    catch (e) { console.warn('records skipped', e); RECORDS = new Map(); }
 
     // Priority targets — Summer Nationals 2026 prep
     const intel = priorityFor(profile.role);
@@ -196,6 +203,7 @@ function buildRosterRow(r, rankKey, existingOpps) {
 
 function oppCard(o) {
     const archs = (o.archetypes || []).slice(0, 3);
+    const rec = o.tracker_id ? RECORDS.get(o.tracker_id) : null;
     return el('a', {
         href: `#opponents/show?id=${o.id}`,
         class: 'opp-card',
@@ -204,7 +212,8 @@ function oppCard(o) {
         el('div', { class: 'opp-card-head' }, [
             el('div', {}, [
                 el('div', { class: 'opp-name' }, [o.name]),
-                o.club ? el('div', { class: 'opp-club' }, [o.club]) : null
+                o.club ? el('div', { class: 'opp-club' }, [o.club]) : null,
+                rec ? el('div', { class: 'opp-club', style: { color: rec.w > rec.l ? '#1f7a1f' : rec.l > rec.w ? '#9b2230' : '#6B7280' } }, [`Met ${rec.w + rec.l} time${rec.w + rec.l > 1 ? 's' : ''}: ${rec.w} won, ${rec.l} lost`]) : null
             ]),
             el('div', { class: 'opp-record' }, [
                 o.rating || '—',
@@ -270,6 +279,12 @@ export async function mountOpponentDetail(root, params) {
     }
     renderPriorityToggle();
     root.appendChild(priorityToggleRow);
+
+    // Every meeting from the competition results, wins and losses.
+    try {
+        const meetings = await renderMeetingsCard(profile, opp);
+        if (meetings) root.appendChild(meetings);
+    } catch (e) { console.warn('meetings skipped', e); }
 
     // editable header card
     const headerCard = el('div', { class: 'card bordered-accent' });

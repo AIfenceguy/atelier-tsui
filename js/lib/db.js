@@ -77,22 +77,39 @@ export async function getOpponent(id) {
     return data;
 }
 
-export async function findOrCreateOpponent({ name, club = null, rating = null }) {
+// One record per fencer. A FencingTracker id is the surest match; the name is
+// the fallback (case-insensitive). An existing record picks up whatever it was
+// missing - club, rating, the tracker id - and never loses what was typed.
+export async function findOrCreateOpponent({ name, club = null, rating = null, tracker_id = null }) {
     const pid = activeProfileId();
     if (!pid) throw new Error('No profile.');
     const trimName = (name || '').trim();
-    if (!trimName) return null;
-    const { data: existing, error: e1 } = await supa
-        .from('opponents')
-        .select('*')
-        .eq('profile_id', pid)
-        .ilike('name', trimName)
-        .limit(1);
-    if (e1) throw e1;
-    if (existing && existing[0]) return existing[0];
+    if (!trimName && !tracker_id) return null;
+    let found = null;
+    if (tracker_id) {
+        const { data, error } = await supa.from('opponents').select('*').eq('profile_id', pid).eq('tracker_id', tracker_id).is('deleted_at', null).limit(1);
+        if (error) throw error;
+        found = data && data[0] ? data[0] : null;
+    }
+    if (!found && trimName) {
+        const { data, error } = await supa.from('opponents').select('*').eq('profile_id', pid).ilike('name', trimName).is('deleted_at', null).limit(1);
+        if (error) throw error;
+        found = data && data[0] ? data[0] : null;
+    }
+    if (found) {
+        const patch = {};
+        if (!found.club && club) patch.club = club;
+        if (!found.rating && rating) patch.rating = rating;
+        if (!found.tracker_id && tracker_id) patch.tracker_id = tracker_id;
+        if (Object.keys(patch).length) {
+            const { data } = await supa.from('opponents').update(patch).eq('id', found.id).select().single();
+            if (data) found = data;
+        }
+        return found;
+    }
     const { data: created, error: e2 } = await supa
         .from('opponents')
-        .insert({ profile_id: pid, name: trimName, club, rating })
+        .insert({ profile_id: pid, name: trimName || `Tracker ${tracker_id}`, club, rating, tracker_id })
         .select()
         .single();
     if (e2) throw e2;

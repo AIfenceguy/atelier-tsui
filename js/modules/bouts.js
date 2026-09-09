@@ -14,6 +14,7 @@ import { loadWeeklyPlan, renderPlanCard } from '../lib/weekly-plan.js';
 import { boutDebrief, listCoachNotes } from '../lib/coach.js';
 import { getWeaknessDrills } from '../lib/weakness-drills.js';
 import { logDrillSession, tagToSlug } from '../lib/drill-mastery.js';
+import { loadLostBouts, renderLostBoutsCard, seedFromResult } from '../lib/lost-bouts.js';
 
 const CONTEXT_OPTIONS = [
     { value: 'club_open', label: 'Club open fencing' },
@@ -55,6 +56,14 @@ export async function mountBoutsList(root) {
         profile,
         onSaved: () => { root.innerHTML = ''; mountBoutsList(root); }
     }));
+
+    // Competition losses the results already know about, waiting for his
+    // side of the story. Also links what he logged by hand to the results.
+    try {
+        const lost = await loadLostBouts(profile);
+        const card = renderLostBoutsCard(profile, lost);
+        if (card) root.appendChild(card);
+    } catch (e) { console.warn('lost bouts skipped', e); }
 
     let bouts = [];
     try {
@@ -146,7 +155,11 @@ export async function mountBoutEntry(root, params) {
         return;
     }
 
-    const editing = params.id ? await getBout(params.id) : null;
+    // Editing an existing bout, or starting from a result row (the facts
+    // filled in, the reflection still his), or a blank form.
+    const editingRow = params.id ? await getBout(params.id) : null;
+    const seed = (!editingRow && params.from) ? await seedFromResult(params.from) : null;
+    const editing = editingRow || seed;
     const taxos = await loadTaxonomies();
     const opponents = await listOpponents();
 
@@ -154,11 +167,18 @@ export async function mountBoutEntry(root, params) {
     const failureOpts = taxos.tactics.filter((t) => t.kind === 'failure');
 
     root.appendChild(el('div', { style: { padding: '40px var(--gut) 8px' } }, [
-        el('h1', { class: 'page-eyebrow' }, [editing ? 'Edit bout' : 'Log a bout']),
+        el('h1', { class: 'page-eyebrow' }, [editingRow ? 'Edit bout' : seed ? 'Log the loss' : 'Log a bout']),
         el('div', { class: 'today-sub' }, [
             el('span', {}, [profile.name.toUpperCase()])
         ])
     ]));
+    if (seed) {
+        root.appendChild(el('div', { class: 'card', style: { margin: '0 var(--gut) 8px' } }, [
+            el('div', { class: 'label', style: { color: '#6B7280' } }, ['From the results']),
+            el('div', { style: { fontFamily: 'var(--serif)', fontStyle: 'italic', fontWeight: '700', fontSize: '22px', color: 'var(--ink)', margin: '4px 0 4px' } }, [`${seed.my_score}–${seed.their_score} to ${seed.opponent_name}`]),
+            el('p', { style: { color: '#6B7280', fontSize: '13px', margin: '0', lineHeight: '1.5' } }, [seed.fact + '. The facts are filled in below; add how the touches went and what you noticed.'])
+        ]));
+    }
 
     const form = el('form', {
         onsubmit: async (e) => {
@@ -178,6 +198,9 @@ export async function mountBoutEntry(root, params) {
         style: { padding: '0 var(--gut)' }
     });
     root.appendChild(form);
+    // Carried from the result row, or from the bout being edited.
+    form.appendChild(el('input', { type: 'hidden', name: 'opponent_tracker_id', value: editing?.opponent_tracker_id ? String(editing.opponent_tracker_id) : '' }));
+    form.appendChild(el('input', { type: 'hidden', name: 'source_bout_id', value: editing?.source_bout_id || '' }));
 
     // SECTION: When / where
     form.appendChild(sectionLabel('When · where'));
@@ -386,7 +409,7 @@ export async function mountBoutEntry(root, params) {
     // SUBMIT
     form.appendChild(el('div', { style: { display: 'flex', gap: '10px', marginTop: '24px', paddingTop: '20px', borderTop: '1px solid var(--rule)' } }, [
         el('a', { href: '#bouts', class: 'btn btn-ghost btn-mono-label', style: { flex: '1', textDecoration: 'none' } }, ['Cancel']),
-        el('button', { type: 'submit', class: 'btn btn-primary btn-mono-label', style: { flex: '2' } }, [editing ? 'Save changes' : 'Save bout'])
+        el('button', { type: 'submit', class: 'btn btn-primary btn-mono-label', style: { flex: '2' } }, [editingRow ? 'Save changes' : 'Save bout'])
     ]));
 
     async function save() {
@@ -398,12 +421,15 @@ export async function mountBoutEntry(root, params) {
         const opName = (fd.get('opponent_name') || '').toString().trim();
         if (!opName) { toast('Opponent is required', 'error'); return; }
 
+        const trackerId = parseInt((fd.get('opponent_tracker_id') || '').toString(), 10) || null;
+        const sourceId = (fd.get('source_bout_id') || '').toString().trim() || null;
         let opponent = null;
         try {
             opponent = await findOrCreateOpponent({
                 name: opName,
                 club: (fd.get('opponent_club') || '').toString().trim() || null,
-                rating: (fd.get('opponent_rating') || '').toString().trim() || null
+                rating: (fd.get('opponent_rating') || '').toString().trim() || null,
+                tracker_id: trackerId
             });
         } catch (e) {
             console.warn('opponent lookup failed', e);
@@ -415,6 +441,8 @@ export async function mountBoutEntry(root, params) {
             location: (fd.get('location') || '').toString().trim() || null,
             context: selectedCtx || null,
             opponent_id: opponent?.id || null,
+            opponent_tracker_id: trackerId,
+            source_bout_id: sourceId,
             opponent_name: opName,
             opponent_rating: (fd.get('opponent_rating') || '').toString().trim() || null,
             opponent_club: (fd.get('opponent_club') || '').toString().trim() || null,
@@ -430,9 +458,9 @@ export async function mountBoutEntry(root, params) {
         };
 
         try {
-            let savedBoutId = editing?.id || null;
-            if (editing) {
-                await safeWrite({ table: 'bouts', op: 'update', payload, match: { id: editing.id } });
+            let savedBoutId = editingRow?.id || null;
+            if (editingRow) {
+                await safeWrite({ table: 'bouts', op: 'update', payload, match: { id: editingRow.id } });
                 toast('Bout updated');
             } else {
                 const inserted = await safeWrite({ table: 'bouts', op: 'insert', payload });
