@@ -29,8 +29,8 @@ const GOOD = '#1f7a1f';
 const WARN = '#B45309';
 const BAD = '#9b2230';
 
-const CAT_ORDER = ['y12', 'y14', 'cadet', 'junior'];
-const CAT_LABEL = { y12: 'Y12', y14: 'Y14', cadet: 'Cadet', junior: 'Junior' };
+const CAT_ORDER = ['y12', 'y14', 'cadet', 'junior', 'div1'];
+const CAT_LABEL = { y12: 'Y12', y14: 'Y14', cadet: 'Cadet', junior: 'Junior', div1: 'Division I' };
 const TIER_LABEL = { ryc: 'RYC', syc: 'SYC', rjcc: 'RJCC', regional: 'Regional', sjcc: 'SJCC', nac: 'NAC', jo: 'Junior Olympics', nationals: 'Summer Nationals', other: 'Regional' };
 const catLabel = (c) => CAT_LABEL[String(c || '').toLowerCase()] || String(c || '').toUpperCase();
 const tierLabel = (t) => TIER_LABEL[String(t || '').toLowerCase()] || String(t || '').toUpperCase();
@@ -264,10 +264,12 @@ function verdict(e, ctx) {
     if (g === 'challenge') return { word: 'Optional', tone: INK, why: `Development, not points. He would start ${ordinal(p.seed_form)} of ${p.field_n} and learn from the bouts he loses.` };
     if (g === 'addon') return { word: 'Only if already there', tone: INK, why: `${add ? `Adds about ${Math.round(add)} points` : `About ${Math.round(pts)} points on the day`} for an entry${e.travel === 'fly' ? ' and a fare' : ''}, because the family is at this venue anyway.` };
     // skip: say which rule killed it, in the parent's words
-    const isRide = (ctx.goals?.ride_along || []).includes(e.category) || (e.category !== ctx.primary && !(ctx.goals?.secondary || []).includes(e.category));
+    const onLists = e.category === ctx.primary || (ctx.goals?.secondary || []).includes(e.category) || (ctx.goals?.ride_along || []).includes(e.category);
+    const isRide = (ctx.goals?.ride_along || []).includes(e.category);
     const playingUp = ctx.primary && catRank(e.category) > catRank(ctx.primary);
     const formDown = ctx.ts90 && ctx.ts90.vs_weaker >= 6 && ctx.ts90.losses_vs_weaker / ctx.ts90.vs_weaker >= 0.3;
-    if (isRide) return { word: 'Skip', tone: BAD, why: `${catLabel(e.category)} is not what he is chasing this season, and nobody is at this venue anyway.` };
+    if (!onLists) return { word: 'Skip', tone: BAD, why: `${catLabel(e.category)} is not on his plan this season.` };
+    if (isRide) return { word: 'Skip', tone: BAD, why: `${catLabel(e.category)} only rides along, and nobody is at this venue anyway.` };
     if (playingUp && formDown) return { word: 'Skip', tone: BAD, why: `Playing up while he is losing ${ctx.ts90.losses_vs_weaker} of ${ctx.ts90.vs_weaker} bouts to weaker fencers. A bracket of losses, not points.` };
     if (e.tier === 'syc' && pts >= 20) return { word: 'Skip', tone: BAD, why: `Only one SYC counts and a better one is on the plan. Adds ${Math.round(add || 0)} to his total, whatever he scores on the day.` };
     if (e.tier === 'ryc') return { word: 'Skip', tone: BAD, why: `Regional youth events pay no national points, and this one is ${travel}${cost ? ` for ${money(cost)}` : ''}.` };
@@ -286,7 +288,9 @@ function classify(e, ctx) {
     const g = ctx.goals || {};
     const isFocus = e.category === ctx.primary;
     const isSecondary = (g.secondary || []).includes(e.category);
-    const isRide = (g.ride_along || []).includes(e.category) || (!isFocus && !isSecondary);
+    const isRide = (g.ride_along || []).includes(e.category);
+    // A category that is on none of his lists is off the plan, full stop.
+    if (!isFocus && !isSecondary && !isRide) return 'skip';
     const playingUp = ctx.primary && catRank(e.category) > catRank(ctx.primary);
     const formDown = ctx.ts90 && ctx.ts90.vs_weaker >= 6 && ctx.ts90.losses_vs_weaker / ctx.ts90.vs_weaker >= 0.3;
     const sibGoing = siblingGoing(e, ctx);
