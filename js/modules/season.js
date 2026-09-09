@@ -225,7 +225,11 @@ export async function mountSeason(root) {
     }
     const decision = (e) => statusOf.get('s:' + e.id) || statusOf.get('f:' + Number(e.ft_event_id)) || null;
     const registered = new Set(events.filter((e) => decision(e) === 'going').map((e) => Number(e.ft_event_id)).filter(Boolean));
-    const ctx = { profile, sibling, siblingGoals, goals, ts90: ts[90], primary: goals.focus_category || primaryCategory(profile.birth_year), watches, latestPrice, events, sycKeep: new Set(), marks, standing, registered, decision };
+    // The USA Fencing Cadet ranking snapshot: who fills the Elite bracket at a NAC.
+    const { data: rankRows } = await supa.from('usaf_rankings').select('rank,name,points,as_of').eq('category', 'cadet').order('as_of', { ascending: false }).order('rank');
+    const latestAsOf = rankRows?.[0]?.as_of;
+    const rankings = { cadet: (rankRows || []).filter((r) => r.as_of === latestAsOf) };
+    const ctx = { profile, sibling, siblingGoals, goals, ts90: ts[90], primary: goals.focus_category || primaryCategory(profile.birth_year), watches, latestPrice, events, sycKeep: new Set(), marks, standing, registered, decision, rankings };
     for (const e of events) e.cost = tripCost(e, ctx);
     // One SYC counts per youth category: keep the best and one backup as
     // value; the rest are insurance at best. The family's rule narrows the
@@ -568,6 +572,30 @@ function countsToward(e) {
         default: return [];
     }
 }
+// Cadet at a NAC or JO: with 169 or more entries the event is split two weeks
+// out into Elite, the 112 best-ranked registrants on the USA Fencing Cadet
+// ranking, and Challenger (USA Fencing, 5 Aug 2026). With the entry list and
+// the ranking snapshot we can say which side of that line he is on today.
+const rankKey = (s) => {
+    const n = String(s || '').replace(/\(.*?\)/g, '').toLowerCase().replace(/[^a-z, ]/g, '').replace(/\s+/g, ' ').trim();
+    const [last, first = ''] = n.split(',');
+    return last.trim() + ',' + (first.trim().split(' ')[0] || '');
+};
+function eliteBubble(e, ctx) {
+    if (e.category !== 'cadet' || !(e.tier === 'nac' || e.tier === 'jo')) return null;
+    const rows = ctx.rankings?.cadet || [];
+    const names = e.entrant_names || [];
+    const myRank = ctx.standing?.cadet?.rank;
+    if (!rows.length || !names.length || !myRank) return null;
+    const entered = new Set(names.map(rankKey));
+    const above = rows.filter((r) => r.rank < myRank && entered.has(rankKey(r.name))).length;
+    const pos = above + 1, cap = 112, n = names.length;
+    const asOf = rows[0]?.as_of ? new Date(rows[0].as_of + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : 'today';
+    if (n < 169) return { text: `${n} entered: below 169 there is one bracket, no Elite and Challenger.`, tone: INK_MUTE };
+    const split = new Date(new Date(String(e.start_date).slice(0, 10) + 'T00:00:00').getTime() - 14 * 864e5).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    if (pos <= cap) return { text: `Elite on the Cadet ranking of ${asOf}: ${ordinal(pos)} of ${n} entered, ${cap - pos} place${cap - pos === 1 ? '' : 's'} inside the line of ${cap}. The split is made about ${split}.`, tone: GOOD };
+    return { text: `Challenger on the Cadet ranking of ${asOf}: ${ordinal(pos)} of ${n} entered, ${pos - cap} place${pos - cap === 1 ? '' : 's'} outside the Elite line of ${cap}. The split is made about ${split}; results posted before then move the line, and a Challenger fencer who opts in moves up when an Elite spot opens.`, tone: WARN };
+}
 // Does this event feed the ranking for `cat`?
 function feeds(e, cat) {
     if (e.category === cat) return true;
@@ -628,8 +656,9 @@ function weekendsCard(key, title, sub, rows, ctx, refreshed) {
             const tone = st === 'going' ? GOOD : !ok ? INK_MUTE : INK;
             grid.appendChild(el('div', { style: { minWidth: 0 } }, [
                 el('div', { style: { color: tone, fontSize: '14px', fontWeight: st === 'going' ? '700' : '500' } }, [`${catLabel(e.category)}`, el('span', { class: 'label', style: { color: INK_MUTE, marginLeft: '6px' } }, [fmtDay(e.start_date).replace(/^\w+, /, '')])]),
-                el('div', { class: 'label', style: { color: st === 'going' ? GOOD : st === 'considering' ? WARN : INK_MUTE } }, [st === 'going' ? 'Entered' : st === 'considering' ? 'Considering' : !ok ? 'Not eligible' : onPlan ? 'Could add' : 'Eligible, not on his plan'])
-            ]));
+                el('div', { class: 'label', style: { color: st === 'going' ? GOOD : st === 'considering' ? WARN : INK_MUTE } }, [st === 'going' ? 'Entered' : st === 'considering' ? 'Considering' : !ok ? 'Not eligible' : onPlan ? 'Could add' : 'Eligible, not on his plan']),
+                (() => { const b = eliteBubble(e, ctx); return b ? el('div', { style: { color: b.tone, fontSize: '12px', lineHeight: '1.45', marginTop: '3px', fontWeight: '600' } }, [b.text]) : null; })()
+            ].filter(Boolean)));
             grid.appendChild(el('span', { style: { color: ok ? INK : INK_MUTE, fontSize: '13px' } }, [countsToward(e).join(' + ') || '—']));
             grid.appendChild(el('span', { class: 'num', style: { color: INK, fontSize: '13px', textAlign: 'right' } }, [p && ok && p.seed_form != null && p.field_n ? `${p.seed_form}/${p.field_n}` : '—']));
             grid.appendChild(el('span', { class: 'num', style: { color: INK, fontSize: '13px', textAlign: 'right' } }, [p && ok && p.p8 != null ? pct(p.p8) : '—']));
@@ -864,6 +893,7 @@ function eventRow(e, i, ctx, refreshed, group) {
         if (decided && p.field_list?.length) row.appendChild(fieldList(p, ctx));
     }
     const note = [];
+    { const b = eliteBubble(e, ctx); if (b) note.push(b.text); }
     if (group === 'addon' && ctx.sibling) note.push(`${ctx.sibling.name} is going. ${e.travel === 'fly' ? `Add his fare${COSTS ? `, about ${money(cost.flight_pp * 2)} return` : ''},` : 'No extra travel,'} plus the entry.`);
     if (e.tier === 'syc' && (e.category === 'y12' || e.category === 'y14') && pts >= 20) {
         const keep = ctx.events.filter((x) => ctx.sycKeep.has(x.id) && x.category === e.category);
@@ -957,6 +987,7 @@ async function applyLiveForecasts(events, refreshed, profile, myForm) {
     for (const x of entrants) { const k = Number(x.ft_event_id); if (!byEvent.has(k)) byEvent.set(k, []); byEvent.get(k).push(x); }
     for (const e of events) {
         const list = byEvent.get(Number(e.ft_event_id));
+        e.entrant_names = (list || []).map((x) => x.name);
         if (!list || !e.category) continue;
         const f = forecast({ entrants: list, snapshots: snaps, myStrength: myForm, myOfficial: profile.strength_de ?? myForm, myPool: profile.strength_pool ?? null, myTrackerId: profile.tracker_id, category: e.category, tier: e.tier });
         if (!f) continue;
