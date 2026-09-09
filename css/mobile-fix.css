@@ -88,15 +88,13 @@ section.card div[style*='display:flex'] {
     pointer-events: none !important;
 }
 
-/* 13. Role-aware bottom nav.
-       Travel is parent-only planning; Style is a fencer's own model and the
-       parent profile has none. Showing both to everyone pushed the bar to nine
-       cramped items, so each role gets the eight that apply to it. The nav uses
-       grid-auto-flow, so a hidden item simply leaves the row.
-       Only ever sets display:none, so the shown state keeps whatever layout
-       the other nav links already use. */
-body:not([data-active-role='parent']) #bottom-nav a[data-route='travel'] { display: none; }
-body[data-active-role='parent']       #bottom-nav a[data-route='style']  { display: none; }
+/* 13. Bottom nav by login. Travel visibility is decided in css/nav.css from
+       the login and the parent's Settings switches (data-parent /
+       data-see-travel on <body>), never from which profile is being viewed:
+       the old rule here hid the flight tracker from the parent whenever a
+       boy's profile was open. Style is a fencer's own model; the Parent
+       profile has none, so it stays folded there. */
+body[data-active-role='parent'] #bottom-nav a[data-route='style'] { display: none; }
 
 /* 11. Twelve tabs no longer fit a phone width at 1fr each: the labels clipped and
    the newest tabs (Insight, Season, Travel) were unreadable. Give each tab a real

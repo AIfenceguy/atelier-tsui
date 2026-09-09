@@ -2467,3 +2467,131 @@ body {
 .badges-pill {
     color: var(--ink);
 }
+
+/* =====================================================
+   STATS CARD — house style. The arcade look (Fredoka, coloured pills,
+   plastic bars, alarm-red pace) is replaced by the site's own voice:
+   serif italic for names and abilities, quiet mono for labels and
+   numbers, thin rules, amber for "behind" rather than red. Later rules
+   win, and the earlier ones used !important, so these do too.
+   ===================================================== */
+.level-card {
+    background: var(--surface, #fff);
+    border-radius: 12px !important;
+    padding: 20px 20px 10px !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04) !important;
+    border: 1px solid var(--rule, rgba(0,0,0,0.07));
+    border-top-width: 3px;
+}
+.level-card-head {
+    display: flex !important;
+    align-items: center !important;
+    gap: 14px !important;
+    margin-bottom: 12px !important;
+}
+.avatar-tile {
+    width: 48px; height: 48px; border-radius: 999px;
+    background: var(--surface, #fff);
+    border: 1.5px solid var(--accent, var(--gold));
+    color: var(--ink) !important;
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-style: italic; font-weight: 700; font-size: 26px;
+    box-shadow: none;
+}
+.avatar-tile::after { display: none; }
+.level-name {
+    font-family: 'Cormorant Garamond', Georgia, serif !important;
+    font-style: italic !important;
+    font-weight: 700 !important;
+    font-size: 30px !important;
+    line-height: 1.05;
+    letter-spacing: 0;
+    color: var(--ink) !important;
+}
+.level-meta { gap: 14px; margin-top: 2px; }
+.streak-pill, .badges-pill {
+    background: none !important;
+    border: 0; padding: 0; border-radius: 0; box-shadow: none;
+    font-family: var(--mono) !important;
+    font-size: 9.5px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #6B7280 !important;
+}
+.badge-strip { gap: 5px; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--rule, rgba(0,0,0,0.07)); }
+.badge-stamp {
+    width: auto; height: 22px; padding: 0 7px; border-radius: 4px;
+    background: none; border: 1px solid var(--rule, rgba(0,0,0,0.1));
+    font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; font-weight: 600;
+    color: var(--ink); cursor: default;
+}
+.badge-stamp:hover { transform: none; }
+.badge-stamp.is-locked { opacity: 0.35; filter: none; }
+.badge-stamp.is-earned { background: none; border-color: var(--ink); box-shadow: none; }
+
+/* Ability rows: name in serif, level as a quiet numeral on the right. */
+.ability-row.strike, .ability-row[data-ability=strike] { --bar-color: #9b2230; }
+.ability-row.guard,  .ability-row[data-ability=guard]  { --bar-color: #2f4f8f; }
+.ability-row.engine, .ability-row[data-ability=engine] { --bar-color: #b8860b; }
+.ability-row.mind,   .ability-row[data-ability=mind]   { --bar-color: #5b4b8a; }
+.ability-row { padding: 14px 0 12px; border-top: 1px solid var(--rule, rgba(0,0,0,0.07)); }
+.ability-row:first-of-type { border-top: 0; }
+.ability-head {
+    display: flex;
+    grid-template-columns: none;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+.ability-icon-name { order: 0; }
+.ability-label {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-style: italic;
+    font-weight: 700;
+    font-size: 22px;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--ink);
+}
+.level-badge {
+    order: 1;
+    width: auto; height: auto; border-radius: 0;
+    background: none; box-shadow: none;
+    display: inline-flex; flex-direction: row; align-items: baseline; gap: 6px;
+    font-family: var(--mono);
+    color: var(--ink);
+}
+.level-badge .level-lv { font-size: 9px; letter-spacing: 0.18em; color: #6B7280; opacity: 1; margin: 0; }
+.level-badge .level-num { font-size: 20px; font-weight: 600; margin: 0; color: var(--ink); }
+.ability-bar {
+    height: 5px !important;
+    border-radius: 999px;
+    background: rgba(0,0,0,0.06);
+    box-shadow: none;
+}
+.ability-fill {
+    background: var(--bar-color) !important;
+    box-shadow: none;
+    transition: width 0.5s ease;
+}
+.ability-fill::after { display: none; }
+.tier-gold .ability-fill, .tier-platinum .ability-fill { animation: none; background: var(--bar-color) !important; }
+.tier-platinum .ability-level, .tier-gold .ability-level { text-shadow: none; }
+.ability-foot {
+    margin-top: 7px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    color: #6B7280;
+}
+.ability-xp { font-weight: 500; color: #6B7280; }
+.ability-pace { font-weight: 500; }
+.ability-pace.is-behind { color: #B45309; }
+.ability-pace.is-close  { color: var(--ink); }
+.ability-pace.is-good   { color: #1f7a1f; }
+.ability-pace.is-idle   { color: #6B7280; }
+
+/* One fencer on the page: one card, not half a grid. */
+.level-grid:has(> .level-card:only-child) { grid-template-columns: minmax(0, 720px); }

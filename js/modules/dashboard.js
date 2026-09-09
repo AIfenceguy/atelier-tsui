@@ -361,8 +361,13 @@ function boutCard(b) {
 // Level dashboard — Strike / Guard / Engine / Mind for both kids
 // =====================================================
 async function buildLevelDashboard() {
+    // A fencer's page shows that fencer alone. The parent profile shows every
+    // fencer on the account side by side. A kid's login only ever receives his
+    // own profile from the database, so he cannot see a sibling here.
     const allProfiles = await listAllProfiles();
-    const kids = allProfiles.filter(p => p.role === 'raedyn' || p.role === 'kaylan');
+    const fencers = allProfiles.filter(p => p.kind === 'fencer' || p.role === 'raedyn' || p.role === 'kaylan');
+    const active = activeProfile();
+    const kids = active && fencers.some(p => p.id === active.id) ? fencers.filter(p => p.id === active.id) : fencers;
     if (!kids.length) return null;
 
     const inputsByKid = await Promise.all(kids.map(p => fetchXpInputs(p.id)));
@@ -457,7 +462,7 @@ function abilityRow(key, ability, dailyXp, days) {
                 el('span', { class: 'level-num' }, [String(ability.level)])
             ]),
             el('div', { class: 'ability-icon-name' }, [
-                el('span', { class: 'ability-label' }, [meta.label.toUpperCase()])
+                el('span', { class: 'ability-label' }, [meta.label])
             ])
         ]),
         el('div', { class: 'ability-bar' }, [
