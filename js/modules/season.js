@@ -507,6 +507,7 @@ function eventRow(e, i, ctx, refreshed, group) {
             stat("He'd start", ordinal(p.seed_form) + (p.seed_official && p.seed_official !== p.seed_form ? ` (${ordinal(p.seed_official)})` : ''), p.seed_form <= 8 ? GOOD : INK),
             ...(p.seed_pool ? [stat('By pools', ordinal(p.seed_pool), p.seed_pool > p.seed_form + 4 ? WARN : INK)] : []),
             stat('Likely finish', ordinal(Math.round(p.median || p.exp)), finishColor),
+            ...(e.tier === 'syc' && p.p4 != null ? [stat('Podium', pct(p.p4), p.p4 >= 0.3 ? GOOD : INK)] : []),
             stat('Top 8', pct(p.p8), p.p8 >= 0.6 ? GOOD : INK),
             stat('Points on the day', p.points_exp == null ? '—' : pts.toFixed(0), pts >= 25 ? GOOD : INK),
             ...(add != null ? [stat('Adds to ranking', add.toFixed(0), add >= 20 ? GOOD : add === 0 ? BAD : INK)] : [])
