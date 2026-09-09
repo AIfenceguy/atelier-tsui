@@ -105,7 +105,8 @@ function surnameClose(typed, tracker) {
 }
 export function matchResultOpponent(list, name) {
     const t = tokens(name); if (!t.length) return null;
-    const exact = list.filter((o) => { const b = tokens(o.name); return t.every((x) => b.includes(x)); });
+    // A first name alone ("Justin") is never enough: the surname must be there.
+    const exact = list.filter((o) => { const b = tokens(o.name); return surnameClose(name, o.name) && t.every((x) => b.includes(x)); });
     const pool = exact.length ? exact : list.filter((o) => surnameClose(name, o.name));
     const ids = [...new Set(pool.map((o) => o.tracker_id).filter(Boolean))];
     return ids.length === 1 ? pool.find((o) => o.tracker_id === ids[0]) : null;
