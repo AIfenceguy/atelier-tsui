@@ -221,6 +221,7 @@ export async function mountSeason(root) {
     for (const cat of planCats) body.appendChild(pointsPlanCard(profile, cat, events.filter((e) => e.category === cat), ctx));
     body.appendChild(rankedCalendar(events, ctx, true));
     body.appendChild(rankedCalendar(events, ctx, false));
+    body.appendChild(await localEventsCard(profile, homeRes.data));
     for (const [key, title, sub] of GROUPS) {
         const rows = events.filter((e) => e.group === key);
         if (!rows.length) continue;
@@ -631,6 +632,53 @@ function weekendsCard(key, title, sub, rows, ctx, refreshed) {
             card.appendChild(rb);
         }
         wrap.appendChild(card);
+    }
+    return wrap;
+}
+
+// ---------------------------------------------------------------------------
+// Local club events from askFRED, within 60 miles of home: the experience
+// events before the points events. Listed, never scored. Read daily.
+// ---------------------------------------------------------------------------
+async function localEventsCard(profile, home) {
+    const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
+    const zip = home?.home_zip || (String(home?.home_address || '').match(/\b\d{5}\b/) || [])[0];
+    wrap.appendChild(label('Local club events · for experience'));
+    if (!zip) {
+        wrap.appendChild(serif('Set a home ZIP on the Travel screen', '22px', WARN));
+        return wrap;
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const { data } = await supa.from('local_events').select('*').eq('zip', zip).gte('first_date', today).order('first_date').limit(60);
+    // Only the age groups he can enter, from his birth year.
+    const cats = ['y8', 'y10', 'y12', 'y14', 'cadet', 'junior'].filter((c) => c === 'y8' ? profile.birth_year >= 2018 : c === 'y10' ? profile.birth_year >= 2016 : eligible(c, profile));
+    const fits = (ev) => {
+        if (/para|unsanctioned|vet/i.test(String(ev.event || ''))) return false;
+        const a = String(ev.age || '').toLowerCase().replace('-', '');
+        return cats.includes(a) || a === 'youth' || a === 'open' || a === '';
+    };
+    const rows = (data || []).map((t) => ({ ...t, mine: (t.events || []).filter(fits) })).filter((t) => t.mine.length);
+    wrap.appendChild(serif(rows.length ? `${rows.length} within 60 miles` : 'Nothing listed within 60 miles yet', '22px'));
+    wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '4px 0 8px', lineHeight: '1.5' } }, [
+        'Club and local tournaments from askFRED, read each morning. No national points; a Saturday of bouts close to home. Dates are the registration close, usually the event day.'
+    ]));
+    const list = el('div', {});
+    const render = (n) => {
+        list.innerHTML = '';
+        rows.slice(0, n).forEach((t, i) => list.appendChild(el('div', { style: { padding: '8px 0', borderTop: i ? '1px solid var(--rule)' : 'none' } }, [
+            el('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'baseline', flexWrap: 'wrap' } }, [
+                el('span', { style: { color: INK, fontSize: '14px', fontWeight: '600' } }, [t.tournament]),
+                el('span', { class: 'label', style: { color: INK_MUTE } }, [`${fmtDay(t.first_date)} · ${t.distance_mi} mi`])
+            ]),
+            el('div', { class: 'label', style: { color: INK_MUTE, marginTop: '2px' } }, [t.mine.map((e) => e.event.replace(/Men's Foil|Mixed Foil/i, '').trim()).join(' · ') + (t.location ? ` · ${String(t.location).split(',').slice(-3, -1).join(',').trim()}` : '')])
+        ])));
+    };
+    render(8);
+    wrap.appendChild(list);
+    if (rows.length > 8) {
+        const btn = el('button', { class: 'btn btn-ghost btn-sm btn-mono-label', style: { marginTop: '8px' } }, [`All ${rows.length}`]);
+        btn.onclick = () => { render(rows.length); btn.remove(); };
+        wrap.appendChild(btn);
     }
     return wrap;
 }
