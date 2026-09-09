@@ -36,6 +36,15 @@ const catLabel = (c) => CAT_LABEL[String(c || '').toLowerCase()] || String(c || 
 const tierLabel = (t) => TIER_LABEL[String(t || '').toLowerCase()] || String(t || '').toUpperCase();
 const NATIONAL = new Set(['nac', 'jo', 'nationals', 'sjcc']);
 
+// Open question for 2026-27: the youth rule counts "national Cadet events"
+// toward Y14. Regional Cadet events (RJCC, RCC) now pay national points for
+// the Cadet standings, but on 8 Sep 2026 no Y14 row on the member portal
+// carried a regional Cadet value, including Raedyn's after Fortune. Until a
+// posted standing shows one, the plan counts only Cadet NAC / JO / SJCC /
+// Nationals results toward Y14. Flip this when the portal proves otherwise.
+const REGIONAL_CADET_COUNTS_FOR_Y14 = false;
+const countsForY14 = (e) => e.category === 'cadet' && (NATIONAL.has(e.tier) || REGIONAL_CADET_COUNTS_FOR_Y14);
+
 // The intentions, in the order a parent reads them.
 const GROUPS = [
     ['anchor', 'Season anchors · national points', 'NACs, Junior Olympics and Nationals. The family goes; these fill the national slots.'],
@@ -103,7 +112,7 @@ export async function mountSeason(root) {
     body.appendChild(el('div', { class: 'empty' }, [el('p', { class: 'empty-line' }, ['Reading the fields…'])]));
 
     const today = new Date().toISOString().slice(0, 10);
-    const [tsRes, evRes, watchRes, priceRes, boutRes, refreshRes, mineRes, homeRes, runRes, sibRes, marksRes, goalsRes] = await Promise.all([
+    const [tsRes, evRes, watchRes, priceRes, boutRes, refreshRes, mineRes, homeRes, runRes, sibRes, marksRes, goalsRes, standRes] = await Promise.all([
         supa.from('true_strength').select('*').eq('profile_id', profile.id),
         supa.from('season_events').select('*').gte('start_date', today).order('start_date'),
         supa.from('flight_watches').select('id,label,destination,depart_date,return_date,hotel_nightly_rate,booked_out_cash,booked_ret_cash,passengers').is('deleted_at', null),
@@ -115,7 +124,8 @@ export async function mountSeason(root) {
         supa.from('refresh_runs').select('finished_at,events_done,pages').not('finished_at', 'is', null).order('id', { ascending: false }).limit(1).maybeSingle(),
         supa.from('profiles').select('id,name,birth_year,strength_de,strength_pool,tracker_id').eq('kind', 'fencer'),
         supa.from('standings_marks').select('*').eq('weapon', 'MF'),
-        supa.from('fencer_goals').select('*')
+        supa.from('fencer_goals').select('*'),
+        supa.from('fencer_standings').select('*').eq('profile_id', profile.id)
     ]);
     body.innerHTML = '';
     if (runRes?.data?.finished_at) {
@@ -167,7 +177,8 @@ export async function mountSeason(root) {
 
     // Cost per trip (this fencer's own days at that tournament), then intentions.
     const marks = Object.fromEntries((marksRes?.data || []).map((m) => [m.category, m]));
-    const ctx = { profile, sibling, siblingGoals, goals, ts90: ts[90], primary: goals.focus_category || primaryCategory(profile.birth_year), watches, latestPrice, events, sycKeep: new Set(), marks };
+    const standing = Object.fromEntries((standRes?.data || []).map((s) => [s.category, s]));
+    const ctx = { profile, sibling, siblingGoals, goals, ts90: ts[90], primary: goals.focus_category || primaryCategory(profile.birth_year), watches, latestPrice, events, sycKeep: new Set(), marks, standing };
     for (const e of events) e.cost = tripCost(e, ctx);
     // One SYC counts per youth category: keep the best and one backup as
     // value; the rest are insurance at best.
@@ -230,7 +241,7 @@ function marginalPoints(e, ctx) {
     if (!['y12', 'y14', 'cadet'].includes(cat)) return null;
     // The pool he is counting on: the events not marked skip in this category,
     // plus, for Y14, cadet national results.
-    const base = ctx.events.filter((x) => x !== e && x.group !== 'skip' && (x.category === cat || (cat === 'y14' && x.category === 'cadet' && NATIONAL.has(x.tier))));
+    const base = ctx.events.filter((x) => x !== e && x.group !== 'skip' && (x.category === cat || (cat === 'y14' && countsForY14(x))));
     const without = projectTotal(cat, base, name);
     const withE = projectTotal(cat, [...base, e], name);
     return Math.max(0, withE - without);
@@ -350,7 +361,7 @@ function pointsPlanCard(profile, cat, rows, ctx) {
     if (cat === 'y12' || cat === 'y14') {
         const syc = rows.filter((e) => e.tier === 'syc' && e.group !== 'skip').sort((a, b) => P(b) - P(a));
         const nat = rows.filter((e) => NATIONAL.has(e.tier) && e.group !== 'skip').sort((a, b) => P(b) - P(a));
-        const cadetNat = cat === 'y14' ? ctx.events.filter((e) => e.category === 'cadet' && NATIONAL.has(e.tier) && e.group !== 'skip').sort((a, b) => P(b) - P(a)) : [];
+        const cadetNat = cat === 'y14' ? ctx.events.filter((e) => countsForY14(e) && e.group !== 'skip').sort((a, b) => P(b) - P(a)) : [];
         // Best four results count, at most one of them an SYC: the SYC slot
         // plus the three best national results, whichever category they come from.
         const pool = [
@@ -375,7 +386,16 @@ function pointsPlanCard(profile, cat, rows, ctx) {
             'USA Fencing has published the threshold and the cap but not the order it fills Elite with for Cadet; for the first events it is drawn from last season\'s national results re-scored on the new tables.'
         ]));
     }
-    // Where that total would sit on the real standings today.
+    // Where he stands today, from the member portal, before any of this.
+    const st = ctx.standing?.[cat];
+    if (st && st.rank) {
+        wrap.appendChild(el('p', { style: { color: INK, fontSize: '13px', margin: '0 0 6px', lineHeight: '1.5' } }, [
+            el('b', {}, [`Today: ${ordinal(st.rank)} with ${Number(st.points).toFixed(1)} points`]),
+            st.counted?.length ? ` (${st.counted.map((x) => Number(x).toFixed(1)).join(' + ')}). ` : '. ',
+            `Standings as of ${new Date(st.as_of + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}; last season's results roll off as this season's land.`
+        ]));
+    }
+    // Where the plan's total would sit on the real standings today.
     const mk = ctx.marks?.[cat];
     if (mk && slots.length) {
         const total = slots.reduce((a, s) => a + P(s.ev), 0);
