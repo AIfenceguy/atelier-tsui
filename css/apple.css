@@ -1027,9 +1027,11 @@ h1, h2, h3, h4, h5, h6,
 .ability-icon { display: none !important; }
 .ability-icon-name { flex: 1; }
 .ability-label {
-    font-family: var(--mono) !important; font-size: 11px !important; font-weight: 500 !important;
-    letter-spacing: 0.22em !important; text-transform: uppercase; color: var(--ink) !important;
+    font-family: var(--serif) !important; font-style: italic; font-size: 21px !important; font-weight: 700 !important;
+    letter-spacing: 0 !important; text-transform: none; line-height: 1.1; color: var(--ink) !important;
 }
+.level-card-titles { flex: 1 1 auto; min-width: 0; text-align: left; align-items: flex-start; }
+.level-meta { justify-content: flex-start; }
 .ability-pace-icon { display: none !important; }
 .ability-bar {
     height: 3px !important; border-radius: 0 !important;
@@ -1046,8 +1048,8 @@ h1, h2, h3, h4, h5, h6,
     letter-spacing: 0.08em; color: #6B7280 !important; font-weight: 500 !important;
 }
 .ability-pace.is-good   { color: #1f7a1f !important; }
-.ability-pace.is-close  { color: #B45309 !important; }
-.ability-pace.is-behind { color: #9b2230 !important; }
+.ability-pace.is-close  { color: var(--ink) !important; }
+.ability-pace.is-behind { color: #B45309 !important; }
 .ability-pace.is-idle   { color: #6B7280 !important; }
 
 

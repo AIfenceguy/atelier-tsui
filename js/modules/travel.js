@@ -19,8 +19,11 @@ import { canSeeTravel } from '../lib/visibility.js';
 const INK = 'var(--ink, #1A1D24)';
 // Literal, not var(--ink-mute): that token composites to ~3.1:1 on white.
 const INK_MUTE = '#6B7280';
-// The middle dot that separates facts in a line.
+// The typographic bits the cards use: a middle dot between facts, an arrow
+// between airports, an em dash before an aside.
 const MID = '·';
+const ARROW = '→';
+const EMD = '—';
 const GOOD = '#1f7a1f';
 // Amber-700. Explicit hex, AA on white (~5.1:1) - a warning nobody can read
 // is not a warning.
