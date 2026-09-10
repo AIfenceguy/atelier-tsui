@@ -239,7 +239,8 @@ export async function mountTravel(root) {
             const cur = Number(latest.price);
             const min = Number(cheapest.price);
             const isBest = cur <= min;
-            const perSeat = cur / (w.passengers || 1);
+            const pax = w.passengers || 1;
+            const perSeat = cur / pax;
             const hitTarget = w.target_price && perSeat <= w.target_price;
 
             // Always one person, never a party total. Ricky: "just show 1 person
@@ -249,15 +250,28 @@ export async function mountTravel(root) {
             const isRoundTrip = !!latest.searched_return_date;
             const shape = isRoundTrip ? 'round trip' : 'one way';
 
-            card.appendChild(el('div', { style: { display: 'flex', alignItems: 'baseline', gap: '10px', marginTop: '8px', flexWrap: 'wrap' } }, [
-                el('span', {
-                    style: {
-                        color: hitTarget ? GOOD : INK,
-                        fontSize: '30px', fontWeight: '700', fontFamily: 'var(--mono)'
-                    }
-                }, [money(perSeat)]),
-                el('span', { style: { color: INK_MUTE, fontSize: '13px' } }, [`per person ${MID} ${shape}`])
+            // The first line answers the only question a parent asks: what does
+            // it cost today, for one seat, which way, from which airport, and
+            // when was that looked up. Everything else hangs off that.
+            const seenAt = new Date(latest.observed_at);
+            const seenText = seenAt.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+            card.appendChild(el('div', { style: { marginTop: '10px' } }, [
+                el('div', { class: 'kicker', style: { color: INK_MUTE } }, [`Today's fare ${MID} checked ${seenText}`]),
+                el('div', { style: { display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' } }, [
+                    el('span', { style: { color: hitTarget ? GOOD : INK, fontSize: '30px', fontWeight: '700', fontFamily: 'var(--mono)' } }, [money(perSeat)]),
+                    el('span', { style: { color: INK_MUTE, fontSize: '13px' } }, [`per person ${MID} ${shape} ${MID} ${latest.origin || originList[0]} ${ARROW} ${w.destination}${latest.airline ? ` ${MID} ${latest.airline}` : ''}`])
+                ])
             ]));
+            // What was already bought, against today's fare.
+            const bookedOut = Number(w.booked_out_cash) || 0;
+            if (bookedOut > 0 && !isRoundTrip) {
+                const diff = bookedOut - perSeat;
+                card.appendChild(el('div', { style: { color: diff > 0 ? GOOD : INK, fontSize: '13px', marginTop: '6px', lineHeight: '1.5' } }, [
+                    diff > 0
+                        ? `You booked the outbound at ${money(bookedOut)} per person. Today is ${money(diff)} cheaper per person${pax > 1 ? ` (${money(diff * pax)} for ${pax})` : ''}. Rebook only if the airline's change fee is less than that.`
+                        : `You booked the outbound at ${money(bookedOut)} per person. Today's fare is ${diff < 0 ? money(-diff) + ' higher' : 'the same'}, so your booking stands.`
+                ]));
+            }
 
             // Everything a traveller needs to actually arrange the trip: when to
             // leave the house, when the wheels leave the ground, where and for
@@ -384,26 +398,27 @@ export async function mountTravel(root) {
                 ]));
             }
 
-            card.appendChild(el('div', { style: { color: INK_MUTE, fontSize: '12px', marginTop: '8px' } }, [
-                `Price seen ${fmtDate(String(latest.observed_at).slice(0, 10))}`
+            // Today against the history, in one sentence each.
+            const lowDay = fmtDate(String(cheapest.observed_at).slice(0, 10));
+            card.appendChild(el('div', { style: { color: isBest ? GOOD : INK_MUTE, fontSize: '13px', marginTop: '8px' } }, [
+                isBest
+                    ? `Lowest fare seen so far: today's ${money(perSeat)}${cheapest !== latest ? ` matches the low of ${lowDay}` : ''}.`
+                    : `Lowest seen: ${money(min / pax)} per person on ${lowDay}. Today is ${money((cur - min) / pax)} above it.`
             ]));
-
-            // The judgement Kelly actually needs: cheap relative to what we've seen.
-            const verdict = isBest
-                ? { text: 'Lowest price seen so far', color: GOOD }
-                : { text: `${money((cur - min) / (w.passengers || 1))} per person above the low of ${money(min / (w.passengers || 1))} seen ${fmtDate(String(cheapest.observed_at).slice(0, 10))}`, color: INK_MUTE };
-            card.appendChild(el('div', { style: { color: verdict.color, fontSize: '13px', marginTop: '2px' } }, [verdict.text]));
-
             if (w.target_price) {
+                const targetShapeOk = isRoundTrip || Number(w.target_price) < 250;
                 card.appendChild(el('div', {
-                    style: { color: hitTarget ? GOOD : INK_MUTE, fontSize: '13px', marginTop: '2px', fontWeight: hitTarget ? '600' : '400' }
-                }, [hitTarget ? `At or below your ${money(w.target_price)} per person target ${EMD} book it.` : `Target ${money(w.target_price)} per person`]));
+                    style: { color: hitTarget && targetShapeOk ? GOOD : INK_MUTE, fontSize: '13px', marginTop: '2px', fontWeight: hitTarget && targetShapeOk ? '600' : '400' }
+                }, [
+                    !targetShapeOk
+                        ? `Your alert is set at ${money(w.target_price)} per person for the round trip; only the outbound is priced now, so the two are not compared.`
+                        : hitTarget ? `At or below your ${money(w.target_price)} per person alert ${EMD} book it.` : `Alert set at ${money(w.target_price)} per person; today is ${money(perSeat - w.target_price)} above it.`
+                ]));
             }
 
             // Per-airport comparison: the preferred airport is listed first and
             // labelled, so a $12 saving at a farther airport is obvious rather
             // than hidden behind a single "cheapest" number.
-            const pax = w.passengers || 1;
             if (originList.length > 1) {
                 const bestBy = new Map();
                 for (const p of prices) {
@@ -423,30 +438,44 @@ export async function mountTravel(root) {
                         if (b[0] === w.preferred_origin) return 1;
                         return Number(a[1].price) - Number(b[1].price);
                     });
+                    // Two numbers per airport, named: what it costs now (the last
+                    // time that airport was looked up) and the lowest it has been.
+                    const latestBy = new Map();
+                    for (const p of prices) {
+                        if (!p.origin) continue;
+                        const cur = latestBy.get(p.origin);
+                        if (!cur || new Date(p.observed_at) > new Date(cur.observed_at)) latestBy.set(p.origin, p);
+                    }
+                    const staleDays = (p) => Math.round((Date.now() - new Date(p.observed_at).getTime()) / 864e5);
+                    const header = el('div', { style: { display: 'grid', gridTemplateColumns: '52px 1fr 1fr', gap: '8px', padding: '4px 0', borderBottom: '1px solid var(--rule)' } }, [
+                        el('span', { class: 'kicker', style: { color: INK_MUTE } }, ['Airport']),
+                        el('span', { class: 'kicker', style: { color: INK_MUTE } }, ['Today, per person']),
+                        el('span', { class: 'kicker', style: { color: INK_MUTE } }, ['Lowest seen'])
+                    ]);
                     const rows = ordered.map(([code, p]) => {
                         const isPref = code === w.preferred_origin;
+                        const now = latestBy.get(code);
+                        const age = now ? staleDays(now) : null;
                         const diff = Number(p.price) - overall;
-                        return el('div', {
-                            style: {
-                                display: 'flex', alignItems: 'baseline', gap: '8px',
-                                padding: '3px 0', fontSize: '13px', flexWrap: 'wrap'
-                            }
-                        }, [
-                            el('span', {
-                                style: { fontFamily: 'var(--mono)', fontWeight: '700', color: isPref ? 'var(--accent)' : INK, minWidth: '38px' }
-                            }, [code]),
-                            isPref ? el('span', { style: { color: 'var(--accent)', fontSize: '11px' } }, ['★']) : null,
-                            el('span', { style: { color: INK, fontFamily: 'var(--mono)' } }, [money(p.price / pax)]),
-                            el('span', { style: { color: INK_MUTE, fontSize: '12px' } }, ['per person']),
-                            diff > 0
-                                ? el('span', { style: { color: INK_MUTE, fontSize: '12px' } }, [`${money(diff / pax)} more than ${cheapestCode}`])
-                                : el('span', { style: { color: GOOD, fontSize: '12px' } }, ['cheapest']),
-                            el('span', { style: { color: INK_MUTE, fontSize: '12px' } }, [`seen ${fmtDate(String(p.observed_at).slice(0, 10))}`])
+                        return el('div', { style: { display: 'grid', gridTemplateColumns: '52px 1fr 1fr', gap: '8px', padding: '5px 0', borderBottom: '1px solid var(--rule)', fontSize: '13px', alignItems: 'baseline' } }, [
+                            el('span', { style: { fontFamily: 'var(--mono)', fontWeight: '700', color: isPref ? 'var(--accent)' : INK } }, [code, isPref ? ' ★' : '']),
+                            el('span', {}, [
+                                el('span', { style: { color: age > 2 ? INK_MUTE : INK, fontFamily: 'var(--mono)', fontWeight: age > 2 ? '400' : '600' } }, [now ? money(now.price / pax) : EMD]),
+                                el('span', { style: { color: INK_MUTE, fontSize: '12px', marginLeft: '6px' } }, [now ? (age > 2 ? `not checked since ${fmtDate(String(now.observed_at).slice(0, 10))}` : `checked ${fmtDate(String(now.observed_at).slice(0, 10))}`) : 'not checked'])
+                            ]),
+                            el('span', {}, [
+                                el('span', { style: { color: diff > 0 ? INK : GOOD, fontFamily: 'var(--mono)' } }, [money(p.price / pax)]),
+                                el('span', { style: { color: INK_MUTE, fontSize: '12px', marginLeft: '6px' } }, [`${fmtDate(String(p.observed_at).slice(0, 10))}${diff > 0 ? ` ${MID} ${money(diff / pax)} more than ${cheapestCode}` : ` ${MID} cheapest airport`}`])
+                            ])
                         ]);
                     });
-                    card.appendChild(el('div', { style: { marginTop: '10px' } }, [
-                        el('div', { class: 'kicker', style: { color: INK_MUTE } }, ['Best price per airport']),
-                        ...rows
+                    card.appendChild(el('div', { style: { marginTop: '12px' } }, [
+                        el('div', { class: 'kicker', style: { color: INK_MUTE, marginBottom: '2px' } }, ['By airport']),
+                        header,
+                        ...rows,
+                        el('div', { style: { color: INK_MUTE, fontSize: '12px', marginTop: '6px', lineHeight: '1.5' } }, [
+                            'Prices are per person, one seat. An airport that has not been checked in the last two days shows its last price in grey; the daily check prices the airport with the best fare more often.'
+                        ])
                     ]));
                 }
             }
@@ -605,8 +634,8 @@ export async function mountTravel(root) {
 
             card.appendChild(el('div', { style: { color: INK_MUTE, fontSize: '11px', marginTop: '4px', fontFamily: 'var(--mono)' } }, [
                 // days looked, not rows written - one check writes a row per airport
-                `checked ${dailyBest.length} day${dailyBest.length === 1 ? '' : 's'}`,
-                w.last_checked_at ? ` · last ${fmtDate(w.last_checked_at.slice(0, 10))}` : ''
+                `Fares checked on ${dailyBest.length} day${dailyBest.length === 1 ? '' : 's'} so far`,
+                w.last_checked_at ? `, most recently ${fmtDate(w.last_checked_at.slice(0, 10))}` : ''
             ]));
 
             if (latest.booking_url) {
