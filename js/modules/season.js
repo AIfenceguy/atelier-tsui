@@ -272,6 +272,7 @@ export async function mountSeason(root) {
     body.appendChild(await peersCard(profile, events));
     body.appendChild(howToRead(profile, sibling));
     if (PARENT) body.appendChild(addEventCard(profile));
+    if (PARENT) body.appendChild(usafCard(ctx));
     body.appendChild(recentBouts(boutRes.data || [], profile));
 }
 
@@ -1253,6 +1254,49 @@ function howToRead(profile, sibling) {
 // ---------------------------------------------------------------------------
 // Add an event: paste the FencingTracker link.
 // ---------------------------------------------------------------------------
+// The official standings, read on request from USA Fencing's own ranking
+// data (Cadet, Junior, Senior lists; youth points come from the points
+// pages). Not scheduled: the member portal asks crawlers to stay out, so a
+// parent presses the button and the app reads two pages, once.
+function usafCard(ctx) {
+    const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
+    wrap.appendChild(label('USA Fencing standings'));
+    const lists = [['CADET', 'cadet', 'Cadet'], ['JUNIOR', 'junior', 'Junior']];
+    const status = (cat) => {
+        const st = ctx.standing?.[cat], mk = ctx.marks?.[cat];
+        if (st?.rank) return `${ordinal(st.rank)} with ${Number(st.points).toFixed(1)}, standings of ${new Date(st.as_of + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+        if (mk?.as_of) return `list read ${new Date(mk.as_of + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, he is not on it`;
+        return 'not read yet';
+    };
+    wrap.appendChild(serif('Where he stands, officially', '24px'));
+    wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '13px', margin: '4px 0 10px', lineHeight: '1.5' } }, [
+        'Reads the current national ranking for a category from USA Fencing, two pages of a hundred, and updates his rank, his counted results, the marks the plan is measured against, and the Elite line for the NACs. Press it after results post, about once a week.'
+    ]));
+    for (const [key, cat, name] of lists) {
+        const row = el('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', padding: '8px 0', borderTop: '1px solid var(--rule)' } });
+        row.appendChild(el('div', {}, [
+            el('div', { style: { color: INK, fontSize: '15px', fontWeight: '600' } }, [`${name} Men's Foil`]),
+            el('div', { class: 'label', style: { color: INK_MUTE, marginTop: '2px' } }, [status(cat)])
+        ]));
+        const btn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm btn-mono-label' }, ['Read now']);
+        btn.onclick = async () => {
+            btn.disabled = true; btn.textContent = 'Reading…';
+            try {
+                const { data, error } = await supa.functions.invoke('refresh-usaf', { body: { age_category: key, gender: 'MENS', weapon: 'FOIL', pages: 2 } });
+                if (error || data?.error) throw new Error(error?.message || data?.error);
+                toast(`${name}: ${data.rows} athletes read${data.updated?.length ? ' · ' + data.updated.join(', ') : ''}`);
+                location.reload();
+            } catch (err) { btn.disabled = false; btn.textContent = 'Read now'; toast('Could not read: ' + (err.message || err), 'error'); }
+        };
+        row.appendChild(btn);
+        wrap.appendChild(row);
+    }
+    wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '8px 0 0', lineHeight: '1.5' } }, [
+        'Y14 and Y12 points are on separate USA Fencing points pages and are still entered from those by hand.'
+    ]));
+    return wrap;
+}
+
 function addEventCard(profile) {
     const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
     wrap.appendChild(label('Add an event'));
