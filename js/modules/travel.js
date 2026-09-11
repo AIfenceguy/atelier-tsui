@@ -14,7 +14,7 @@ import { getState } from '../lib/state.js';
 import { activeProfile } from '../lib/state.js';
 import { safeWrite } from '../lib/offline.js';
 import { homeCard } from '../lib/home-card.js';
-import { canSeeTravel } from '../lib/visibility.js';
+import { canSeeTravel, isParent } from '../lib/visibility.js';
 
 const INK = 'var(--ink, #1A1D24)';
 // Literal, not var(--ink-mute): that token composites to ~3.1:1 on white.
@@ -651,6 +651,23 @@ export async function mountTravel(root) {
         }
 
         card.appendChild(el('div', { style: { marginTop: '10px', display: 'flex', justifyContent: 'flex-end', gap: '4px' } }, [
+            // Price this watch now, server-side, the same way the 7am job does.
+            // Parents only: each press spends fare searches.
+            isParent() && w.is_active ? el('button', {
+                type: 'button',
+                style: linkBtn(INK_MUTE),
+                onclick: async (e) => {
+                    const b = e.currentTarget; b.disabled = true; b.textContent = 'checking…';
+                    try {
+                        const { data, error } = await supa.functions.invoke('flight-check', { body: { watch_id: w.id } });
+                        if (error || data?.error) throw new Error(error?.message || data?.error);
+                        if (data?.skipped) throw new Error(data.reason);
+                        const r = data?.watches?.[0] || {};
+                        toast(r.best_per_seat ? `Best all-in $${r.best_per_seat}/seat from ${r.best_origin} · ${r.searches} fare${r.searches === 1 ? '' : 's'} read${r.alert ? ' · ' + r.alert : ''}` : (r.deactivated || r.skipped || 'No fares came back'));
+                        location.reload();
+                    } catch (err) { b.disabled = false; b.textContent = 'check now'; toast('Could not check: ' + (err.message || err), 'error'); }
+                }
+            }, ['check now']) : null,
             el('button', {
                 type: 'button',
                 style: linkBtn(INK_MUTE),
