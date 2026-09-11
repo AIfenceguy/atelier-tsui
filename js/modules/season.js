@@ -24,6 +24,7 @@ import { estimateTrip, withLiveFare, milesBetween } from '../lib/trip-cost.js';
 import { canSeeSeason, canSeeCosts, isParent } from '../lib/visibility.js';
 import { go } from '../lib/router.js';
 import { stageOf } from '../lib/lost-bouts.js';
+import { categoriesFor, CATEGORY_LABEL } from '../lib/category.js';
 
 const INK = 'var(--ink)';
 // Literal: var(--ink-mute) composites below AA on the cream surface.
@@ -1261,16 +1262,20 @@ function howToRead(profile, sibling) {
 function usafCard(ctx) {
     const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
     wrap.appendChild(label('USA Fencing standings'));
-    const lists = [['CADET', 'cadet', 'Cadet'], ['JUNIOR', 'junior', 'Junior']];
+    // The lists this fencer can be on this season, youngest first. Youth lists
+    // come from the national points pages, Cadet and Junior from the ranking.
+    const readable = ['y10', 'y12', 'y14', 'cadet', 'junior'];
+    const cats = categoriesFor(ctx.profile?.birth_year).filter((c) => readable.includes(c));
+    const lists = (cats.length ? cats : ['cadet', 'junior']).map((c) => [c.toUpperCase(), c, CATEGORY_LABEL[c] || c]);
     const status = (cat) => {
         const st = ctx.standing?.[cat], mk = ctx.marks?.[cat];
         if (st?.rank) return `${ordinal(st.rank)} with ${Number(st.points).toFixed(1)}, standings of ${new Date(st.as_of + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
-        if (mk?.as_of) return `list read ${new Date(mk.as_of + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, he is not on it`;
+        if (mk?.as_of) return `list read ${new Date(mk.as_of + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, not on it`;
         return 'not read yet';
     };
     wrap.appendChild(serif('Where he stands, officially', '24px'));
     wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '13px', margin: '4px 0 10px', lineHeight: '1.5' } }, [
-        'Reads the current national ranking for a category from USA Fencing, two pages of a hundred, and updates his rank, his counted results, the marks the plan is measured against, and the Elite line for the NACs. Press it after results post, about once a week.'
+        'Reads the current national list for a category from USA Fencing and updates the rank, the counted results, the marks the plan is measured against, and the Elite line for the NACs. Youth lists come from the national points pages, Cadet and Junior from the ranking, two pages of a hundred. Press it after results post, about once a week.'
     ]));
     for (const [key, cat, name] of lists) {
         const row = el('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', padding: '8px 0', borderTop: '1px solid var(--rule)' } });
@@ -1291,9 +1296,6 @@ function usafCard(ctx) {
         row.appendChild(btn);
         wrap.appendChild(row);
     }
-    wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '8px 0 0', lineHeight: '1.5' } }, [
-        'Y14 and Y12 points are on separate USA Fencing points pages and are still entered from those by hand.'
-    ]));
     return wrap;
 }
 
