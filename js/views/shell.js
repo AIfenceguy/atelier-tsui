@@ -88,7 +88,10 @@ export function renderSignIn(root) {
                 }
             }, ['Continue with Google']),
             el('div', { class: 'auth-foot' }, [
-                'One family · private by default'
+                'One family · private by default · ',
+                el('a', { href: 'legal.html#terms', style: { color: 'inherit' } }, ['Terms']),
+                ' · ',
+                el('a', { href: 'legal.html#privacy', style: { color: 'inherit' } }, ['Privacy'])
             ])
         ])
     ]);
