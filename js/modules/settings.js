@@ -22,10 +22,15 @@ export async function mountSettings(root) {
         return;
     }
     const session = getState().session;
-    const [{ data: home }, { data: profiles }] = await Promise.all([
+    const [{ data: home }, { data: profiles }, whoRes] = await Promise.all([
         supa.from('household').select('*').maybeSingle(),
-        supa.from('profiles').select('id,name,kind,role,login_user_id,birth_year').order('name')
+        supa.from('profiles').select('id,name,kind,role,login_user_id,birth_year').order('name'),
+        // Which address each fencer signs in with, from the login service
+        // (the browser cannot read auth users itself). Never the password.
+        supa.functions.invoke('kid-login', { body: { mode: 'who' } }).catch(() => ({ data: null }))
     ]);
+    const logins = whoRes?.data?.logins || {};
+    for (const p of profiles || []) p.login_email = logins[p.id]?.email || null;
 
     // --- What the kids can see -------------------------------------------
     const card = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
@@ -71,7 +76,7 @@ export async function mountSettings(root) {
     for (const p of (profiles || []).filter((x) => x.kind === 'fencer' || x.role !== 'parent')) {
         who.appendChild(el('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '10px', padding: '8px 0', borderTop: '1px solid var(--rule)' } }, [
             el('span', { style: { color: INK, fontSize: '14px', fontWeight: '600' } }, [p.name, p.birth_year ? el('span', { class: 'label', style: { color: INK_MUTE, marginLeft: '8px' } }, [`born ${p.birth_year}`]) : null].filter(Boolean)),
-            el('span', { class: 'label', style: { color: p.login_user_id ? GOOD : INK_MUTE } }, [p.login_user_id ? 'Has his own login' : 'No login, parent only'])
+            el('span', { class: 'label', style: { color: p.login_user_id ? GOOD : INK_MUTE, textAlign: 'right' } }, [p.login_user_id ? (p.login_email ? `Signs in as ${p.login_email}` : 'Has his own login') : 'No login, parent only'])
         ]));
     }
     root.appendChild(who);
@@ -120,6 +125,25 @@ function fencersCard(session, profiles) {
                 } catch (err) { mk.disabled = false; mk.textContent = 'Create his login'; toast('Could not create: ' + (err.message || err), 'error'); }
             };
             row.appendChild(el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', flex: '1 1 100%', marginTop: '6px' } }, [email, pw, mk]));
+        } else {
+            // The login exists; the parent can give it a new password when the
+            // old one is lost. The address is shown, the password never is.
+            const pw = el('input', { type: 'password', class: 'field-input', placeholder: 'new password, 8 or more', autocomplete: 'new-password', style: { flex: '1 1 160px' } });
+            const rs = el('button', { type: 'button', class: 'btn btn-ghost btn-sm btn-mono-label' }, ['Set a new password']);
+            rs.onclick = async () => {
+                if (pw.value.length < 8) { toast('A password of 8 or more', 'error'); return; }
+                rs.disabled = true; rs.textContent = 'Saving…';
+                try {
+                    const { data, error } = await supa.functions.invoke('kid-login', { body: { mode: 'reset', profile_id: p.id, password: pw.value } });
+                    if (error || data?.error) throw new Error(error?.message || data?.error);
+                    pw.value = ''; rs.disabled = false; rs.textContent = 'Set a new password';
+                    toast(`${p.name} now signs in with ${data.email || 'his login'} and the new password`);
+                } catch (err) { rs.disabled = false; rs.textContent = 'Set a new password'; toast('Could not change it: ' + (err.message || err), 'error'); }
+            };
+            row.appendChild(el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', flex: '1 1 100%', marginTop: '6px' } }, [
+                el('span', { class: 'label', style: { color: INK_MUTE, flex: '1 1 100%' } }, [p.login_email ? `Signs in as ${p.login_email}` : 'Has a login']),
+                pw, rs
+            ]));
         }
         box.appendChild(row);
         card.appendChild(box);
