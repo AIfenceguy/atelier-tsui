@@ -1318,6 +1318,7 @@ function usafCard(ctx) {
                 const { data, error } = await supa.functions.invoke('refresh-usaf', { body: { age_category: key, gender: 'MENS', weapon: 'FOIL', pages: 2 } });
                 if (error || data?.error) throw new Error(error?.message || data?.error);
                 toast(`${name}: ${data.rows} athletes read${data.updated?.length ? ' · ' + data.updated.join(', ') : ''}`);
+                try { await supa.rpc('refresh_ratings'); } catch (_) { /* the nightly job catches up */ }
                 location.reload();
             } catch (err) { btn.disabled = false; btn.textContent = 'Read now'; toast('Could not read: ' + (err.message || err), 'error'); }
         };
@@ -1350,7 +1351,39 @@ function usafCard(ctx) {
     return wrap;
 }
 
+// The app's own number: an Elo replayed over every placing USA Fencing
+// publishes, fitted to the strength scale the app already shows. No
+// FencingTracker read is needed to produce it.
+async function ownRating(host, profile) {
+    let row = null;
+    if (profile?.usaf_member_id) {
+        const { data } = await supa.from('athlete_ratings').select('*').eq('member_id', profile.usaf_member_id).maybeSingle();
+        row = data;
+    }
+    if (!row && profile?.usaf_user_id) {
+        const { data: r } = await supa.from('usaf_rankings').select('name').eq('user_id', profile.usaf_user_id).order('as_of', { ascending: false }).limit(1);
+        if (r?.[0]?.name) {
+            const { data } = await supa.from('athlete_ratings').select('*').ilike('name', r[0].name).limit(1);
+            row = data?.[0] || null;
+        }
+    }
+    if (!row) return;
+    const { data: cal } = await supa.from('rating_calibration').select('n,r2,athletes,events').eq('id', 1).maybeSingle();
+    const box = el('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '12px', padding: '10px 0 6px' } });
+    box.appendChild(el('div', {}, [
+        label('Own rating'),
+        el('div', { style: { fontFamily: 'var(--serif)', fontStyle: 'italic', fontSize: '30px', color: INK, lineHeight: '1.1', marginTop: '2px' } }, [String(row.strength_est ?? Math.round(row.rating))])
+    ]));
+    box.appendChild(el('div', { class: 'label', style: { color: INK_MUTE, textAlign: 'right', lineHeight: '1.5' } }, [
+        `from ${row.games} placings on record`,
+        el('br'),
+        cal?.n ? `scale fitted on ${cal.n} fencers \u00b7 ${cal.athletes} rated over ${cal.events} events` : 'unfitted scale'
+    ]));
+    host.appendChild(box);
+}
+
 async function resultsOnRecord(host, profile) {
+    await ownRating(host, profile);
     const ors = [];
     if (profile?.usaf_member_id) ors.push(`member_id.eq.${profile.usaf_member_id}`);
     if (profile?.usaf_user_id) ors.push(`user_id.eq.${profile.usaf_user_id}`);
