@@ -106,10 +106,9 @@ export async function loadOrCreateProfiles(userId) {
         setState({ profiles: [], activeProfileId: null });
         return [];
     }
-    profiles.sort((a, b) =>
-        ['raedyn', 'kaylan', 'parent'].indexOf(a.role) -
-        ['raedyn', 'kaylan', 'parent'].indexOf(b.role)
-    );
+    // Fencers first, oldest to youngest, the parent last.
+    const key = (p) => (p.kind === 'parent' || p.role === 'parent') ? [1, ''] : [0, String(p.birth_year || '9999') + p.name];
+    profiles.sort((a, b) => { const x = key(a), y = key(b); return x[0] - y[0] || String(x[1]).localeCompare(String(y[1])); });
     setState({ profiles });
 
     // A fencer signing in with their own account is pinned to their profile —

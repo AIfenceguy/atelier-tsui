@@ -203,7 +203,7 @@ export async function mountSeason(root) {
         const twin = events.find((e) => !e.ft_event_id && e.category === cat && sameTournament(e.tournament, m.tournament || r?.title) && daysApart(e.start_date, m.event_date || r?.event_date || e.start_date) <= 4);
         if (twin) { twin.ft_event_id = m.ft_event_id; known.add(Number(m.ft_event_id)); continue; }
         events.push({
-            id: 'member-' + m.id, ft_event_id: m.ft_event_id, tournament: m.tournament || r?.title || `FencingTracker event ${m.ft_event_id}`,
+            id: 'member-' + m.id, ft_event_id: m.ft_event_id, tournament: m.tournament || r?.title || `Event ${m.ft_event_id}`,
             category: cat, tier: tierOf(m.tournament || r?.title, cat), start_date: m.event_date || r?.event_date || today, end_date: m.event_date || r?.event_date || today,
             city: null, venue: null, travel: null, entrants: r?.entrants, est_cost_two: null, cost_breakdown: null,
             projections: { [profile.name]: { points_exp: null, seed_form: null, p8: null, p16: null, exp: null, pending: true } }, member_added: true
@@ -1179,7 +1179,7 @@ async function peersCard(profile, events) {
     const add = el('button', { class: 'btn btn-mono-label', style: { width: '100%', marginTop: '8px' } }, ['Watch this fencer']);
     add.onclick = async () => {
         const m = String(input.value).match(/\/p\/(\d{6,10})/) || String(input.value).match(/(\d{6,10})/);
-        if (!m) { toast('Paste a FencingTracker profile link', 'error'); return; }
+        if (!m) { toast('Paste a results profile link', 'error'); return; }
         add.disabled = true; add.textContent = 'Reading…';
         try {
             const tid = Number(m[1]);
@@ -1301,7 +1301,7 @@ function addEventCard(profile) {
     const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
     wrap.appendChild(label('Add an event'));
     wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '13px', margin: '6px 0 10px', lineHeight: '1.5' } }, [
-        'Paste the FencingTracker link of the event he is registered for (fencingtracker.com/event/…). The entry list is read once and every registered fencer is scored on their recent form.'
+        'Paste the results link of the event he is registered for. The entry list is read once and every registered fencer is scored on their recent form.'
     ]));
     const input = el('input', { type: 'text', class: 'field-input', placeholder: 'https://fencingtracker.com/event/12345', autocomplete: 'off', style: { color: INK } });
     const cat = el('select', { class: 'field-input', style: { marginTop: '8px', color: INK } }, [
@@ -1312,7 +1312,7 @@ function addEventCard(profile) {
     const status = el('div', { class: 'label', style: { color: INK_MUTE, marginTop: '8px', minHeight: '16px' } }, ['']);
     btn.onclick = async () => {
         const m = String(input.value).match(/(\d{4,7})/);
-        if (!m) { toast('Paste a FencingTracker event link', 'error'); return; }
+        if (!m) { toast('Paste an event link', 'error'); return; }
         const ftEventId = Number(m[1]);
         btn.disabled = true; btn.textContent = 'Reading…';
         try {
@@ -1385,7 +1385,7 @@ function tripCost(e, ctx) {
 
 function recentBouts(bouts, profile) {
     const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
-    wrap.appendChild(label('Recent bouts · from FencingTracker'));
+    wrap.appendChild(label('Recent bouts · from the results'));
     if (!bouts.length) { wrap.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '13px', margin: '6px 0 0' } }, ['No bouts loaded yet.'])); return wrap; }
     const off = profile.strength_de ?? 0;
     bouts.forEach((b, i) => {

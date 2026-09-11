@@ -28,7 +28,7 @@ export async function mountTournaments(root, params) {
             name: 'Summer Nationals 2026',
             start_date: '2026-06-27', end_date: '2026-07-06',
             location: 'Portland, OR',
-            events: profile.role === 'kaylan' ? ['Y-12','Y-14'] : ['Y-14','Cadet']
+            events: (Number(profile.birth_year) >= 2014 || profile.role === 'kaylan') ? ['Y-12','Y-14'] : ['Y-14','Cadet']
         }) }, ['Quick-add Summer Nationals']) : null
     ]));
 

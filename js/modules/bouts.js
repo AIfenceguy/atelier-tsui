@@ -837,7 +837,7 @@ async function buildOpponentRecordCard(b) {
     if (!tid) {
         wrap.appendChild(el('div', { class: 'label', style: { color: MUTE } }, ['Opponent record']));
         wrap.appendChild(el('p', { style: { color: MUTE, fontSize: '13px', margin: '6px 0 0' } }, [
-            'No FencingTracker record linked for this opponent yet. Records load for the fencers seeded around you at each event.'
+            'No competition record linked for this opponent yet. Records load for the fencers seeded around you at each event.'
         ]));
         return wrap;
     }
@@ -851,7 +851,7 @@ async function buildOpponentRecordCard(b) {
     const w = Object.fromEntries((wins || []).map((x) => [x.window_days, x]));
     const m = (d) => w[d]?.median_pct;
 
-    wrap.appendChild(el('div', { class: 'label', style: { color: MUTE } }, ['Opponent record · FencingTracker']));
+    wrap.appendChild(el('div', { class: 'label', style: { color: MUTE } }, ['Opponent record · from the results']));
     wrap.appendChild(el('div', { style: { display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap', margin: '6px 0 2px' } }, [
         el('a', { href: op.tracker_url, target: '_blank', rel: 'noopener', style: { fontFamily: 'var(--serif)', fontStyle: 'italic', fontWeight: '700', fontSize: '22px', color: 'var(--ink)', textDecoration: 'none' } }, [op.name]),
         el('span', { class: 'label', style: { color: MUTE } }, [[op.club, op.birth_year ? `born ${op.birth_year}` : null, op.rating].filter(Boolean).join(' · ')])

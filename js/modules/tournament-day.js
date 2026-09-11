@@ -611,7 +611,7 @@ export async function mountTournamentDay(root, params) {
             const evResp = await fetch(`${FTL_WORKER_URL}/events?tid=${ftlTour.id}`).then(r => r.json());
             const events = evResp.events || [];
             // Match Cadet MF for Raedyn, Y12 MF for Kaylan, Y14 MF as fallback
-            const eventKeyPrefs = profile.role === 'kaylan'
+            const eventKeyPrefs = (profile.role === 'kaylan' || Number(profile.birth_year) >= 2014)
                 ? ['y-12 men', 'y12 men', 'youth 12 men']
                 : ['cadet men', 'y-14 men', 'y14 men', 'youth 14 men'];
             let event = null;

@@ -88,16 +88,27 @@ export async function searchIntel(query) {
  *   kaylan → all Y12-ranked fencers sorted by Y12 rank
  * Each entry is the full intel record.
  */
-export async function getNationalRoster(role) {
+// The roster that matters for a fencer: his home category by birth year.
+// (The intel file only carries y12 and y14 rankings today.)
+function rankKeyFor(roleOrProfile) {
+    const p = typeof roleOrProfile === 'object' && roleOrProfile ? roleOrProfile : { role: roleOrProfile };
+    if (p.role === 'raedyn') return 'y14';
+    if (p.role === 'kaylan') return 'y12';
+    const by = Number(p.birth_year);
+    if (by >= 2014 && by <= 2015) return 'y12';
+    if (by >= 2012 && by <= 2013) return 'y14';
+    return null;
+}
+export async function getNationalRoster(roleOrProfile) {
     await load();
     if (!_data) return [];
-    const rankKey = role === 'raedyn' ? 'y14' : role === 'kaylan' ? 'y12' : null;
+    const rankKey = rankKeyFor(roleOrProfile);
     if (!rankKey) return [];
     return _data
         .filter(f => (f.ranks || {})[rankKey])
         .sort((a, b) => a.ranks[rankKey] - b.ranks[rankKey]);
 }
 
-export function getRosterRankKey(role) {
-    return role === 'raedyn' ? 'y14' : role === 'kaylan' ? 'y12' : null;
+export function getRosterRankKey(roleOrProfile) {
+    return rankKeyFor(roleOrProfile);
 }

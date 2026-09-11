@@ -74,7 +74,7 @@ export async function mountOpponentsList(root) {
     }
 
     // National roster — Y14 top 100 for Raedyn, Y12 top 174 for Kaylan
-    const rankKey = getRosterRankKey(profile.role);
+    const rankKey = getRosterRankKey(profile);
     if (rankKey) {
         const rosterSection = el('section', { class: 'nat-roster', style: { margin: '8px 0 16px' } });
         rosterSection.appendChild(el('div', { class: 'nat-roster-head', style: { padding: '0 var(--gut)', marginBottom: '8px', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px' } }, [
@@ -95,7 +95,7 @@ export async function mountOpponentsList(root) {
         root.appendChild(rosterSection);
 
         let _roster = [];
-        getNationalRoster(profile.role).then(r => {
+        getNationalRoster(profile).then(r => {
             _roster = r;
             rosterSection.querySelector('.nat-roster-count').textContent = `${r.length} FENCERS`;
             renderRoster('');
@@ -598,7 +598,7 @@ function buildPrioritySection(profile, intel, opps) {
     ]));
 
     wrap.appendChild(el('div', { class: 'kicker', style: { marginBottom: '14px' } }, [
-        `pulled ${PRIORITY_META.pulled_at} from fencingtracker.com · `,
+        `pulled ${PRIORITY_META.pulled_at} from the results · `,
         profile.role === 'raedyn' ? `${PRIORITY_META.raedyn_total_bouts} career bouts`
             : profile.role === 'kaylan' ? `${PRIORITY_META.kaylan_total_bouts} career bouts`
             : 'family view'

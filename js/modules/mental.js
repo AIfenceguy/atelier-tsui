@@ -109,8 +109,10 @@ export async function mountMental(root) {
         wrap._cb = cb;
         return wrap;
     }
-    const visToggle = toggleRow('vis', `Daily visualization rep (${profile.role === 'kaylan' ? '3' : '5'} min)`, existing?.visualization_done);
-    const breathToggle = toggleRow('br', profile.role === 'raedyn' ? '4-7-8 breathing rehearsed' : 'Breathing rehearsed', existing?.breathing_done);
+    // Younger fencers get the shorter rep; the older ones the 4-7-8 pattern.
+    const young = profile.role === 'kaylan' || (Number(profile.birth_year) >= 2014);
+    const visToggle = toggleRow('vis', `Daily visualization rep (${young ? '3' : '5'} min)`, existing?.visualization_done);
+    const breathToggle = toggleRow('br', young ? 'Breathing rehearsed' : '4-7-8 breathing rehearsed', existing?.breathing_done);
     const cueToggle = toggleRow('cue', 'In-bout cue practice', existing?.in_bout_cue_practice);
     card.appendChild(visToggle);
     card.appendChild(breathToggle);
@@ -130,7 +132,7 @@ export async function mountMental(root) {
     // role-specific blocks
     let instinctEditor = null;
     let speedSlider = null;
-    if (profile.role === 'raedyn') {
+    if (!young) {
         card.appendChild(el('div', { class: 'field', style: { marginTop: '14px' } }, [
             el('label', {}, ['Instinct catalog — moves you reached for today (no thinking)'])
         ]));
@@ -139,7 +141,7 @@ export async function mountMental(root) {
             placeholder: 'add a move you defaulted to'
         });
         card.appendChild(instinctEditor);
-    } else if (profile.role === 'kaylan') {
+    } else {
         card.appendChild(el('div', { class: 'field', style: { marginTop: '14px' } }, [
             el('label', {}, ['Speed self-rating (1–10)']),
             (speedSlider = scaleSlider({ value: existing?.speed_self_rating ?? 6 }))

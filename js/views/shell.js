@@ -1,7 +1,8 @@
 // Sign-in view (shown when no session) and the topbar countdown updater.
 
 import { el } from '../lib/util.js';
-import { signInWithGoogle, signInWithMagicLink, signInWithPassword, signOut } from '../lib/auth.js';
+import { signInWithGoogle, signInWithPassword, signOut } from '../lib/auth.js';
+import { mountOnboard } from '../modules/onboard.js';
 import { isConfigured } from '../lib/supa.js';
 import { nextTournament } from '../lib/db.js';
 import { daysUntil, fmtDate } from '../lib/util.js';
@@ -79,26 +80,6 @@ export function renderSignIn(root) {
             }, ['Sign in']),
             el('div', { class: 'auth-divider' }, ['or']),
             el('button', {
-                class: 'btn btn-ghost btn-block btn-mono-label',
-                onclick: async (e) => {
-                    const v = document.getElementById('magic-email').value.trim();
-                    if (!v) { alert('Enter email first'); return; }
-                    const btn = e.currentTarget;
-                    const orig = btn.textContent;
-                    btn.disabled = true;
-                    btn.textContent = 'Sending…';
-                    try {
-                        await signInWithMagicLink(v);
-                        btn.textContent = 'Check your inbox';
-                    } catch (err) {
-                        btn.textContent = orig;
-                        btn.disabled = false;
-                        alert('Magic link failed: ' + err.message);
-                    }
-                }
-            }, ['Send magic link']),
-            el('div', { class: 'auth-divider' }, ['or']),
-            el('button', {
                 class: 'btn btn-ghost btn-block',
                 disabled: !isConfigured(),
                 onclick: async () => {
@@ -107,7 +88,7 @@ export function renderSignIn(root) {
                 }
             }, ['Continue with Google']),
             el('div', { class: 'auth-foot' }, [
-                'Three profiles · one studio · private by default'
+                'One family · private by default'
             ])
         ])
     ]);
@@ -122,6 +103,11 @@ export function renderSignIn(root) {
  * into an obvious "oh, wrong login".
  */
 export function renderNoProfile(root, email) {
+    // A signed-in account with no fencer is a new family: set it up here.
+    return mountOnboard(root, email);
+}
+
+export function renderNoProfileLegacy(root, email) {
     root.innerHTML = '';
     document.body.classList.add('is-signed-out');
 

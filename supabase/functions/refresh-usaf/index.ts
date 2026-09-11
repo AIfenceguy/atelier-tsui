@@ -98,11 +98,22 @@ Deno.serve(async (req) => {
     if (error) return json({ error: error.message }, 500);
   }
 
-  // The household's own fencers, by USA Fencing user id.
+  // The household's own fencers, by USA Fencing user id. A fencer without an
+  // id yet is matched once by first name and birth year, and keeps the id.
   const ids = out.map((r) => r.user_id).filter(Boolean);
   const { data: mine } = await db.from("profiles").select("id,name,usaf_user_id").in("usaf_user_id", ids.length ? ids : [-1]);
+  const { data: unkeyed } = await db.from("profiles").select("id,name,birth_year,usaf_user_id").eq("kind", "fencer").is("usaf_user_id", null);
+  const found = [...(mine || [])];
+  for (const p of unkeyed || []) {
+    const first = String(p.name || "").trim().toLowerCase();
+    const hits = rows.filter((row) => Number(row.year_of_birth) === Number(p.birth_year) && String(row.preferred_name || "").trim().toLowerCase().split(/\s+/)[0] === first);
+    if (hits.length === 1) {
+      await db.from("profiles").update({ usaf_user_id: hits[0].user_id }).eq("id", p.id);
+      found.push({ id: p.id, name: p.name, usaf_user_id: hits[0].user_id });
+    }
+  }
   const updated: string[] = [];
-  for (const p of mine || []) {
+  for (const p of found) {
     const row = out.find((r) => r.user_id === p.usaf_user_id);
     if (!row) continue;
     await db.from("fencer_standings").delete().eq("profile_id", p.id).eq("category", category).eq("weapon", weaponCode);

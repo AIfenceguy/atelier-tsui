@@ -151,11 +151,11 @@ export async function mountInsight(root) {
     ]);
 
     strengthCard.appendChild(row('Official (direct elimination)', official,
-        ciLo && ciHi ? `95% range ${ciLo} – ${ciHi}` : 'FencingTracker'));
+        ciLo && ciHi ? `95% range ${ciLo} – ${ciHi}` : 'strength'));
     if (pool != null) {
         const gap = official - pool;
         strengthCard.appendChild(row('Official (pools)', pool,
-            gap > 150 ? `${gap} below DE — pools are costing seeding` : 'FencingTracker',
+            gap > 150 ? `${gap} below DE — pools are costing seeding` : 'strength',
             gap > 150 ? WARN : INK));
     }
     for (const f of forms.slice().sort((a, b) => String(a.category).localeCompare(String(b.category)))) {
@@ -241,7 +241,7 @@ export async function mountInsight(root) {
             card.appendChild(el('a', {
                 href: e.tracker_url, target: '_blank', rel: 'noopener', class: 'label',
                 style: { color: 'var(--cta, #0071e3)', display: 'inline-block', marginTop: '10px' }
-            }, ['Full entry list on FencingTracker \u2192']));
+            }, ['Full entry list \u2192']));
         }
 
         // The tier above: the fencers one band up, read from twelve months of
@@ -267,7 +267,7 @@ export async function mountInsight(root) {
     if (rules.length || cases.length) {
         body.appendChild(label('How fencers actually climb', INK_MUTE, { margin: '18px var(--gut) 6px' }));
         body.appendChild(el('p', { style: { color: INK_MUTE, fontSize: '12px', margin: '0 var(--gut) 10px', lineHeight: '1.5' } }, [
-            'Read off real FencingTracker histories. Each rule carries the result it came from.'
+            'Read off real competition histories. Each rule carries the result it came from.'
         ]));
         for (const r of rules) {
             body.appendChild(el('div', { class: 'card', style: { margin: '0 var(--gut) 10px' } }, [
@@ -285,7 +285,7 @@ export async function mountInsight(root) {
                 el('p', { style: { color: INK, fontSize: '13px', lineHeight: '1.6', margin: '8px 0 0' } }, [c.detail]),
                 c.tracker_url
                     ? el('a', { href: c.tracker_url, target: '_blank', rel: 'noopener', class: 'label',
-                               style: { color: 'var(--cta, #0071e3)', display: 'inline-block', marginTop: '8px' } }, ['Profile on FencingTracker →'])
+                               style: { color: 'var(--cta, #0071e3)', display: 'inline-block', marginTop: '8px' } }, ['Results profile →'])
                     : null
             ]));
         }
@@ -323,7 +323,7 @@ export async function mountInsight(root) {
     body.appendChild(el('p', {
         style: { color: INK_MUTE, fontSize: '12px', lineHeight: '1.6', padding: '18px var(--gut) 40px', margin: '0', borderTop: '1px solid var(--rule)' }
     }, [
-        'Strength bands come from live event entry lists on FencingTracker. Results in categories with no bands on file ',
+        'Strength bands come from live event entry lists. Results in categories with no bands on file ',
         '(Senior, Div II) are shown but not counted. Form uses a 90-day half-life and counts results from other ',
         'categories at half weight.'
     ]));
@@ -436,7 +436,7 @@ async function tierBlock(e, profile, goal, oppById, winsByCat, flagsByCat, flags
         const ages = tier.map((t) => oppById.get(t.tracker_id)?.fetched_at).filter(Boolean).map((d) => Date.now() - new Date(d).getTime());
         const oldest = ages.length ? Math.round(Math.max(...ages) / 864e5) : null;
         const rb = el('button', { class: 'btn btn-ghost btn-mono-label', style: { marginTop: '10px', width: '100%' } }, [
-            oldest == null ? 'Read their records from FencingTracker' : `Re-read their records · oldest copy ${oldest} day${oldest === 1 ? '' : 's'} old`
+            oldest == null ? 'Read their records' : `Re-read their records · oldest copy ${oldest} day${oldest === 1 ? '' : 's'} old`
         ]);
         rb.onclick = async () => {
             rb.disabled = true;
