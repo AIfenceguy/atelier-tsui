@@ -42,10 +42,10 @@ const NATIONAL = new Set(['nac', 'jo', 'nationals', 'sjcc']);
 
 // Open question for 2026-27: the youth rule counts "national Cadet events"
 // toward Y14. Regional Cadet events (RJCC, RCC) now pay national points for
-// the Cadet standings, but on 8 Sep 2026 no Y14 row on the member portal
-// carried a regional Cadet value, including Raedyn's after Fortune. Until a
-// posted standing shows one, the plan counts only Cadet NAC / JO / SJCC /
-// Nationals results toward Y14. Flip this when the portal proves otherwise.
+// the Cadet standings, but the Y14 points page carries result grids only for
+// Y14 SYC/NAC, Cadet/Junior/Div I NAC and Cadet/Junior SJCC: there is no RJCC
+// Cadet grid (confirmed on the page read 10 Sep 2026, after Fortune posted).
+// So the plan counts only Cadet NAC / JO / SJCC / Nationals results toward Y14.
 const REGIONAL_CADET_COUNTS_FOR_Y14 = false;
 // The youth rule: "any national Cadet, Junior, Div I events" count for Y14.
 const OLDER = new Set(['cadet', 'junior', 'div1']);
@@ -725,6 +725,10 @@ function weekendsCard(key, title, sub, rows, ctx, refreshed) {
             };
             card.appendChild(rb);
         }
+        if (PARENT && w.decided.some((e) => e.usaf_id)) {
+            const e = w.decided.find((x) => x.usaf_id);
+            card.appendChild(entriesButton(e.usaf_id, e.usaf_read_at));
+        }
         wrap.appendChild(card);
     }
     return wrap;
@@ -933,6 +937,7 @@ function eventRow(e, i, ctx, refreshed, group) {
         };
         row.appendChild(rb);
     }
+    if (PARENT && e.usaf_id && group !== 'skip') row.appendChild(entriesButton(e.usaf_id, e.usaf_read_at));
     return row;
 }
 
@@ -1259,6 +1264,29 @@ function howToRead(profile, sibling) {
 // data (Cadet, Junior, Senior lists; youth points come from the points
 // pages). Not scheduled: the member portal asks crawlers to stay out, so a
 // parent presses the button and the app reads two pages, once.
+// Read a tournament's events from USA Fencing: entrants, official
+// competitors, open spots, cap and close of registration, keyed by the
+// tournament id the calendar sync gave the plan's rows.
+async function readEntries(usafId, onStatus) {
+    onStatus('Reading\u2026');
+    const { data, error } = await supa.functions.invoke('refresh-usaf', { body: { tournament_id: Number(usafId) } });
+    if (error || data?.error) throw new Error(error?.message || data?.error);
+    const t = data?.tournaments?.[0];
+    if (!t || t.error) throw new Error(t?.error || 'nothing came back');
+    if (t.mismatch) throw new Error(t.mismatch + ' \u00b7 run the calendar sync first');
+    toast(`${t.name}: ${t.planned?.length ? t.planned.join(' \u00b7 ') : t.events + ' events read'}`);
+}
+
+function entriesButton(usafId, readAt) {
+    const rb = el('button', { class: 'btn btn-ghost btn-sm btn-mono-label', style: { marginTop: '6px', justifySelf: 'start' } }, [readAt ? 'Re-read entries' : 'Read entries']);
+    rb.onclick = async () => {
+        rb.disabled = true;
+        try { await readEntries(usafId, (msg) => { rb.textContent = msg; }); location.reload(); }
+        catch (err) { rb.disabled = false; rb.textContent = 'Read entries'; toast('Could not read: ' + (err.message || err), 'error'); }
+    };
+    return rb;
+}
+
 function usafCard(ctx) {
     const wrap = el('section', { class: 'card', style: { margin: '0 var(--gut) 18px' } });
     wrap.appendChild(label('USA Fencing standings'));
@@ -1296,7 +1324,67 @@ function usafCard(ctx) {
         row.appendChild(btn);
         wrap.appendChild(row);
     }
+    // The calendar: every tournament USA Fencing lists, matched to the plan.
+    const cal = el('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', padding: '8px 0', borderTop: '1px solid var(--rule)' } });
+    cal.appendChild(el('div', {}, [
+        el('div', { style: { color: INK, fontSize: '15px', fontWeight: '600' } }, ['Season calendar']),
+        el('div', { class: 'label', style: { color: INK_MUTE, marginTop: '2px' } }, ['Matches the plan\u2019s tournaments to USA Fencing\u2019s list by name and weekend, so entries and results can be read by id.'])
+    ]));
+    const cb = el('button', { type: 'button', class: 'btn btn-ghost btn-sm btn-mono-label' }, ['Sync now']);
+    cb.onclick = async () => {
+        cb.disabled = true; cb.textContent = 'Syncing\u2026';
+        try {
+            const { data, error } = await supa.functions.invoke('refresh-usaf', { body: { calendar: true } });
+            if (error || data?.error) throw new Error(error?.message || data?.error);
+            toast(`${data.tournaments} tournaments listed \u00b7 ${data.matched} of ${data.planned} planned matched${data.changed?.length ? ' \u00b7 ' + data.changed.length + ' ids corrected' : ''}${data.unmatched?.length ? ' \u00b7 not found: ' + data.unmatched.join('; ') : ''}`);
+            location.reload();
+        } catch (err) { cb.disabled = false; cb.textContent = 'Sync now'; toast('Could not sync: ' + (err.message || err), 'error'); }
+    };
+    cal.appendChild(cb);
+    wrap.appendChild(cal);
+
+    // What USA Fencing has on record for this fencer, from the lists read.
+    const rec = el('div', { style: { borderTop: '1px solid var(--rule)', paddingTop: '10px', marginTop: '4px' } });
+    wrap.appendChild(rec);
+    resultsOnRecord(rec, ctx.profile);
     return wrap;
+}
+
+async function resultsOnRecord(host, profile) {
+    const ors = [];
+    if (profile?.usaf_member_id) ors.push(`member_id.eq.${profile.usaf_member_id}`);
+    if (profile?.usaf_user_id) ors.push(`user_id.eq.${profile.usaf_user_id}`);
+    if (!ors.length) return;
+    const { data } = await supa.from('usaf_rankings').select('category,as_of,rank,points,results').or(ors.join(',')).order('as_of', { ascending: false });
+    const latest = new Map();
+    for (const r of data || []) if (!latest.has(r.category)) latest.set(r.category, r);
+    const seen = new Set();
+    const rows = [];
+    for (const [cat, r] of latest) {
+        for (const x of r.results || []) {
+            const key = x.event_id || `${x.tournament}|${x.event_date}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            rows.push({ ...x, list: cat });
+        }
+    }
+    if (!rows.length) return;
+    rows.sort((a, b) => String(b.event_date || '').localeCompare(String(a.event_date || '')));
+    host.appendChild(label('On record at USA Fencing'));
+    const table = el('div', { style: { display: 'grid', gridTemplateColumns: 'auto 1fr auto auto', columnGap: '12px', rowGap: '4px', alignItems: 'baseline', marginTop: '6px' } });
+    for (const x of rows) {
+        const when = x.event_date ? new Date(x.event_date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' }) : '';
+        const codeCat = { Y10: 'y10', Y12: 'y12', Y14: 'y14', CDT: 'cadet', JNR: 'junior', DV1: 'div1', SNR: 'senior' }[String(x.event_code || '').slice(0, 3).toUpperCase()];
+        const title = `${CATEGORY_LABEL[codeCat] || x.event_code || ''} ${String(x.tournament || '').replace(/^20\d\d\s+/, '')}`.trim();
+        const place = x.place != null ? ordinal(Number(x.place)) : (x.placing || '');
+        const pts = x.score != null && Number.isFinite(Number(x.score)) ? Number(x.score).toFixed(1) : '';
+        const counted = x.carried ? `counts for ${CATEGORY_LABEL[x.list] || x.list}` : '';
+        table.appendChild(el('span', { class: 'label', style: { color: INK_MUTE, whiteSpace: 'nowrap' } }, [when]));
+        table.appendChild(el('span', { style: { color: INK, fontSize: '13px' } }, [title]));
+        table.appendChild(el('span', { style: { color: INK, fontSize: '13px', fontFamily: 'var(--mono)', textAlign: 'right' } }, [place]));
+        table.appendChild(el('span', { class: 'label', style: { color: x.carried ? 'var(--good, #1f7a1f)' : INK_MUTE, textAlign: 'right', whiteSpace: 'nowrap' } }, [pts + (counted ? ' \u00b7 ' + counted : '')]));
+    }
+    host.appendChild(table);
 }
 
 function addEventCard(profile) {

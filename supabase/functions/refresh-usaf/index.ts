@@ -11,6 +11,13 @@
 //                                          number, YOB, club, top-4 points) and
 //                                          result grids per event with the
 //                                          event id, placing and points.
+//   calendar: true                         GET /search/tournaments/{national,regional}
+//                                          lists: every listed tournament with
+//                                          id, dates, venue; the plan's rows get
+//                                          their tournament id by name + weekend.
+//   tournament_id (or tournament_ids[])    GET /details/tournaments/{id}: the
+//                                          events with ids, entrants, official
+//                                          competitors, open spots, cap, close.
 //   event_id (or event_ids[])              GET /rankings/events/{id}/results,
 //                                          the official final placings of one
 //                                          event with each entrant's rating.
@@ -30,6 +37,7 @@ const EVENT_URL = `${HOST}/rankings/events`;
 const DELAY_MS = 500;
 const MAX_PAGES = 4;
 const MAX_EVENTS = 6;
+const MAX_TOURNAMENTS = 4;
 const CATS: Record<string, string> = { CADET: "cadet", JUNIOR: "junior", SENIOR: "senior", DIV1: "div1", VETERAN: "vet", Y14: "y14", Y12: "y12", Y10: "y10" };
 const YOUTH = new Set(["Y10", "Y12", "Y14"]);
 const CODE_CATEGORY: Record<string, string> = { Y10: "y10", Y12: "y12", Y14: "y14", CDT: "cadet", JNR: "junior", DV1: "div1", SNR: "senior", VET: "vet" };
@@ -37,7 +45,7 @@ const MARK_RANKS = [1, 8, 16, 20, 24, 32, 40, 50, 64, 100, 150, 200, 300];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ---- small text helpers -------------------------------------------------
-const decode = (t: string) => t.replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+const decode = (t: string) => t.replace(/&amp;/g, "&").replace(/&#0*39;|&apos;|&rsquo;|&#8217;/g, "'").replace(/&quot;/g, '"').replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
 const strip = (h: string) => decode(String(h || "").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
 const noFlag = (t: string) => t.replace(/[\u{1F1E6}-\u{1F1FF}]/gu, "").replace(/\s+/g, " ").trim();
 const num = (t: string | null | undefined) => { const v = Number(String(t ?? "").replace(/,/g, "").trim()); return Number.isFinite(v) && String(t ?? "").trim() !== "" && String(t).trim() !== "-" ? v : null; };
@@ -137,6 +145,97 @@ function parseYouthPage(html: string): { rows: YouthRow[]; events: GridEvent[] }
   return { rows, events: [...events.values()] };
 }
 
+// ---- the tournament pages -----------------------------------------------
+const MONTHS: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+const iso = (y: number, m: number, d: number) => `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+// "Sep 12 - 13, 2026", "Sep 19, 2026", "Dec 31 - Jan 2, 2027", "Oct. 9–12, 2026".
+function dateRange(text: string): { start: string | null; end: string | null } {
+  const t = String(text || "").replace(/–|—/g, "-").replace(/\./g, "");
+  const m = /([A-Za-z]{3})[a-z]*\s+(\d{1,2})(?:\s*-\s*(?:([A-Za-z]{3})[a-z]*\s+)?(\d{1,2}))?,?\s+(\d{4})/.exec(t);
+  if (!m) return { start: null, end: null };
+  const m1 = MONTHS[m[1].toLowerCase()], m2 = m[3] ? MONTHS[m[3].toLowerCase()] : m1, y = Number(m[5]);
+  if (!m1 || !m2) return { start: null, end: null };
+  const y1 = m[3] && m1 > m2 ? y - 1 : y;
+  return { start: iso(y1, m1, Number(m[2])), end: iso(y, m2, Number(m[4] || m[2])) };
+}
+// "Saturday, September 12" placed inside the tournament's dates.
+function dayDate(text: string, start: string | null, end: string | null): string | null {
+  const m = /([A-Za-z]{3})[a-z]*\s+(\d{1,2})/.exec(String(text || "").replace(/^[A-Za-z]+,\s*/, ""));
+  if (!m || !MONTHS[m[1].toLowerCase()]) return null;
+  const mo = MONTHS[m[1].toLowerCase()], d = Number(m[2]);
+  const base = start || end || new Date().toISOString().slice(0, 10);
+  let y = Number(base.slice(0, 4));
+  if (start && mo < Number(start.slice(5, 7))) y += 1;
+  return iso(y, mo, d);
+}
+const normName = (s: string) => String(s || "").toLowerCase().replace(/^\s*20\d\d\s+/, "").replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim();
+const tokens = (s: string) => new Set(normName(s).split(" ").filter((w) => w && !["the", "and", "of", "cup", "2026", "2027"].includes(w)));
+function nameScore(a: string, b: string): number {
+  const A = tokens(a), B = tokens(b);
+  if (!A.size || !B.size) return 0;
+  let both = 0;
+  for (const w of A) if (B.has(w)) both += 1;
+  return both / Math.max(1, Math.min(A.size, B.size));
+}
+const daysApart = (a: string | null, b: string | null) => (a && b) ? Math.abs((new Date(a + "T00:00:00Z").getTime() - new Date(b + "T00:00:00Z").getTime()) / 86400000) : 99;
+
+type ListRow = { tournament_id: number; name: string; start: string | null; end: string | null; venue: string | null; city: string | null };
+function parseListPage(html: string): ListRow[] {
+  const out: ListRow[] = [];
+  const body = html.slice(Math.max(0, html.indexOf("list-search-form")));
+  for (const tr of body.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
+    const row = tr[1];
+    const link = /href="\/details\/tournaments\/(\d+)"[^>]*>\s*([\s\S]*?)\s*<\/a>/i.exec(row);
+    if (!link) continue;
+    const tds = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((x) => x[1]);
+    const when = dateRange(strip(tds[0] || ""));
+    const place = tds.find((td) => /<br\s*\/?>/i.test(td) && !/details\/tournaments/.test(td));
+    const parts = place ? place.split(/<br\s*\/?>/i).map(strip).filter(Boolean) : [];
+    out.push({ tournament_id: Number(link[1]), name: strip(link[2]), start: when.start, end: when.end, venue: parts[0] || null, city: parts[1] || parts[0] || null });
+  }
+  return out;
+}
+
+type TournamentEvent = { event_id: number; name: string; code: string | null; day: string | null; event_date: string | null; reg_close: string | null; cap: boolean; entrants: number | null; official: number | null; open: number | null; possible: string | null };
+type TournamentPage = { name: string; start: string | null; end: string | null; venue: string | null; city: string | null; events: TournamentEvent[] };
+function parseTournamentPage(html: string): TournamentPage {
+  const h1 = /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(html);
+  const name = h1 ? strip(h1[1]) : strip((/<title>([\s\S]*?)<\/title>/i.exec(html) || ["", ""])[1]).replace(/\s+[-—]\s+USA Fencing.*$/i, "").replace(/^20\d\d\s+/, "");
+  const lead = (label: string) => { const m = new RegExp(label + "<\\/span>\\s*<br\\s*\\/?>\\s*<span[^>]*>([\\s\\S]*?)<\\/span>", "i").exec(html); return m ? strip(m[1]) : null; };
+  const when = dateRange(lead("Tournament Date") || "");
+  const city = lead("Location");
+  const venueM = /Venue<\/span>\s*<br\s*\/?>\s*<span>\s*([^<]+)/i.exec(html);
+  const venue = venueM ? strip(venueM[1]) : null;
+  const events: TournamentEvent[] = [];
+  const at = html.indexOf('id="events-by-day"');
+  const body = at >= 0 ? html.slice(at) : "";
+  let day: string | null = null;
+  const re = /event-by-day-date[^>]*>\s*<p[^>]*>([\s\S]*?)<\/p>|<div data-event_id="(\d+)"[^>]*>/gi;
+  let m: RegExpExecArray | null;
+  const marks: { day?: string; id?: number; at: number; len: number }[] = [];
+  while ((m = re.exec(body))) marks.push(m[1] ? { day: strip(m[1]), at: m.index, len: m[0].length } : { id: Number(m[2]), at: m.index, len: m[0].length });
+  for (let i = 0; i < marks.length; i++) {
+    const mk = marks[i];
+    if (mk.day) { day = mk.day; continue; }
+    const blk = body.slice(mk.at + mk.len, marks[i + 1] ? marks[i + 1].at : mk.at + 6000);
+    const nm = /<span class="name">([\s\S]*?)<\/span>/i.exec(blk);
+    const evName = nm ? strip(nm[1]) : "";
+    const code = /\(([A-Z0-9]{3,8})\)\s*$/.exec(evName);
+    const close = /([\d:]+\s*[ap]m)\s*Close of Registration/i.exec(blk);
+    const ent = /entrant-count[^>]*>\s*(\d+)\s*</i.exec(blk);
+    const off = /<strong[^>]*>\s*(\d+)\s*<\/strong>\s*Official Competitors/i.exec(blk);
+    const opn = /<strong[^>]*>\s*(\d+)\s*<\/strong>\s*Open Spots/i.exec(blk);
+    const poss = /Possible\s+([A-E]\d)/i.exec(blk);
+    events.push({
+      event_id: mk.id!, name: evName.replace(/\s*\([A-Z0-9]{3,8}\)\s*$/, ""), code: code ? code[1].toUpperCase() : null, day, event_date: dayDate(day || "", when.start, when.end),
+      reg_close: close ? close[1].toLowerCase() : null, cap: /registration cap/i.test(blk), entrants: ent ? Number(ent[1]) : null,
+      official: off ? Number(off[1]) : null, open: opn ? Number(opn[1]) : null, possible: poss ? poss[1].toUpperCase() : null,
+    });
+  }
+  return { name, start: when.start, end: when.end, venue, city, events };
+}
+const codeCategory = (code: string | null) => CODE_CATEGORY[String(code || "").slice(0, 3).toUpperCase()] || null;
+
 Deno.serve(async (req) => {
   const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-cron-secret" };
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -210,6 +309,92 @@ Deno.serve(async (req) => {
       if (i < eventIds.length - 1) await sleep(DELAY_MS);
     }
     return json({ events: done });
+  }
+
+  // ---- the season calendar: every listed tournament, matched to the plan ----
+  if (body.calendar) {
+    const rows: ListRow[] = [];
+    const urls = [`${HOST}/search/tournaments/national`, `${HOST}/search/tournaments/regional`, `${HOST}/search/tournaments/regional?page=2`, `${HOST}/search/tournaments/regional?page=3`, `${HOST}/search/tournaments/regional?page=4`];
+    const scopeOf = new Map<number, string>();
+    try {
+      for (let i = 0; i < urls.length; i++) {
+        const r = await fetch(urls[i], { headers: { "User-Agent": UA, "Accept": "text/html" } });
+        if (!r.ok) { if (i >= 2) break; return json({ error: `USA Fencing answered ${r.status} on ${urls[i]}` }, 502); }
+        const page = parseListPage(await r.text());
+        let fresh = 0;
+        for (const row of page) { if (!rows.some((x) => x.tournament_id === row.tournament_id)) { rows.push(row); scopeOf.set(row.tournament_id, i === 0 ? "national" : "regional"); fresh += 1; } }
+        if (i >= 2 && !fresh) break;
+        if (i < urls.length - 1) await sleep(DELAY_MS);
+      }
+    } catch (err) { return json({ error: String((err as Error).message || err) }, 502); }
+    if (!rows.length) return json({ error: "no tournaments found on the lists" }, 502);
+    await db.from("usaf_tournaments").upsert(rows.map((t) => ({ tournament_id: t.tournament_id, name: t.name, scope: scopeOf.get(t.tournament_id) || null, start_date: t.start, end_date: t.end, venue: t.venue, city: t.city, read_at: new Date().toISOString() })), { onConflict: "tournament_id" });
+
+    // Match each planned tournament (name + weekend) to a listed one and keep
+    // its id. The same name can appear twice in a season (a club's RJCC in
+    // October and its RYC in January), so the weekend decides first.
+    const { data: planned } = await db.from("season_events").select("id,usaf_id,tournament,start_date,city");
+    const groups = new Map<string, { tournament: string; start_date: string; ids: string[]; usaf_id: number | null; city: string | null }>();
+    for (const e of planned || []) {
+      const k = `${normName(e.tournament)}|${e.start_date}`;
+      if (!groups.has(k)) groups.set(k, { tournament: e.tournament, start_date: e.start_date, ids: [], usaf_id: e.usaf_id, city: e.city });
+      groups.get(k)!.ids.push(e.id);
+    }
+    const matched: string[] = [], unmatched: string[] = [], changed: string[] = [];
+    for (const g of groups.values()) {
+      let best: { t: ListRow; score: number } | null = null;
+      for (const t of rows) {
+        const gap = daysApart(g.start_date, t.start);
+        if (gap > 3) continue;
+        const score = nameScore(g.tournament, t.name) + (gap === 0 ? 0.05 : 0);
+        if (score >= 0.5 && (!best || score > best.score)) best = { t, score };
+      }
+      if (!best) { unmatched.push(`${g.tournament} (${g.start_date})`); continue; }
+      matched.push(`${g.tournament} -> ${best.t.tournament_id} ${best.t.name}`);
+      if (g.usaf_id !== best.t.tournament_id) {
+        changed.push(`${g.tournament}: ${g.usaf_id ?? "none"} -> ${best.t.tournament_id}`);
+        await db.from("season_events").update({ usaf_id: best.t.tournament_id }).in("id", g.ids);
+      }
+      if (!g.city && best.t.city) await db.from("season_events").update({ city: best.t.city }).in("id", g.ids);
+    }
+    return json({ tournaments: rows.length, planned: groups.size, matched: matched.length, changed, unmatched });
+  }
+
+  // ---- one tournament's events: ids, entrants, caps, closes ---------------
+  const tournamentIds: number[] = [...new Set([body.tournament_id, ...(Array.isArray(body.tournament_ids) ? body.tournament_ids : [])].map(Number).filter((n) => n > 0))].slice(0, MAX_TOURNAMENTS);
+  if (tournamentIds.length) {
+    const done: Record<string, unknown>[] = [];
+    for (let i = 0; i < tournamentIds.length; i++) {
+      const id = tournamentIds[i];
+      try {
+        const r = await fetch(`${HOST}/details/tournaments/${id}`, { headers: { "User-Agent": UA, "Accept": "text/html" } });
+        if (!r.ok) { done.push({ tournament_id: id, error: `USA Fencing answered ${r.status}` }); continue; }
+        const page = parseTournamentPage(await r.text());
+        if (!page.events.length) { done.push({ tournament_id: id, name: page.name, error: "no events found on the page" }); continue; }
+        await db.from("usaf_tournaments").upsert({ tournament_id: id, name: page.name, start_date: page.start, end_date: page.end, venue: page.venue, city: page.city, read_at: new Date().toISOString() }, { onConflict: "tournament_id" });
+        const year = (page.start || page.end || "").slice(0, 4);
+        const evRows = page.events.map((e) => ({
+          event_id: e.event_id, tournament_id: id, event_code: e.code, category: codeCategory(e.code), tier: tierOf(page.name), title: [e.code, year, page.name].filter(Boolean).join(" "),
+          tournament: page.name, city: page.city, venue: page.venue, event_date: e.event_date, entrants: e.official ?? e.entrants, official: e.official, open_spots: e.open, cap: e.cap, reg_close: e.reg_close, possible: e.possible, read_at: new Date().toISOString(),
+        }));
+        const { error } = await db.from("usaf_events").upsert(evRows, { onConflict: "event_id" });
+        if (error) { done.push({ tournament_id: id, error: error.message }); continue; }
+        // The plan's rows for this tournament, by event code.
+        const { data: planned } = await db.from("season_events").select("id,event_code,tournament,entrants").eq("usaf_id", id);
+        const touched: string[] = [];
+        let mismatch: string | null = null;
+        for (const p of planned || []) {
+          if (nameScore(p.tournament, page.name) < 0.5) { mismatch = `${p.tournament} is not ${page.name}`; continue; }
+          const e = page.events.find((x) => String(x.code || "").toUpperCase() === String(p.event_code || "").toUpperCase());
+          if (!e) continue;
+          await db.from("season_events").update({ usaf_event_id: e.event_id, entrants: e.official ?? e.entrants ?? p.entrants, official: e.official, open_spots: e.open, cap: e.cap, reg_close: e.reg_close, usaf_read_at: new Date().toISOString() }).eq("id", p.id);
+          touched.push(`${p.event_code}: ${e.official ?? e.entrants} entered${e.open != null ? `, ${e.open} open` : ""}`);
+        }
+        done.push({ tournament_id: id, name: page.name, dates: [page.start, page.end], city: page.city, events: page.events.length, planned: touched, mismatch });
+      } catch (err) { done.push({ tournament_id: id, error: String((err as Error).message || err) }); }
+      if (i < tournamentIds.length - 1) await sleep(DELAY_MS);
+    }
+    return json({ tournaments: done });
   }
 
   const ageKey = String(body.age_category || "CADET").toUpperCase();
